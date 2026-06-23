@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "src/automations/use-workflow-store.ts",
+    "src/automations/trigger-webhook.ts",
+    "src/automations/workflow-store.ts"
+  ]
+}
