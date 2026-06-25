@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { resolveTriggerWebhookUrl, N8N_WEBHOOK } from './n8n-server';
+import { workflowRequiresTopic } from './data';
+import { resolveTriggerWebhookUrl, getN8nWebhookForType } from './n8n-server';
 import type { N8nJobContext, TriggerWebhookResult } from './n8n.types';
 import type { WorkflowTriggerContext } from './workflow.mapper';
 
@@ -34,6 +35,8 @@ export class N8nService {
       jobId: context.jobId,
       siteId: context.siteId,
       callbackUrl: context.callbackUrl,
+      errorUrl: context.errorUrl,
+      successUrl: context.successUrl,
     });
   }
 
@@ -50,11 +53,14 @@ export class N8nService {
       jobId?: string;
       siteId?: string | null;
       callbackUrl?: string;
+      errorUrl?: string;
+      successUrl?: string;
     },
   ): Promise<TriggerWebhookResult> {
+    const requiresTopic = workflowRequiresTopic(context.workflowType);
     const topic = context.topic?.trim();
 
-    if (!topic) {
+    if (requiresTopic && !topic) {
       return {
         ok: false,
         status: 400,
@@ -65,18 +71,24 @@ export class N8nService {
       };
     }
 
-    const url = resolveTriggerWebhookUrl(context.config.useProductionWebhook, {
-      testUrl: context.config.webhookTestUrl,
-      productionUrl: context.config.webhookProductionUrl,
-    });
+    const webhook = getN8nWebhookForType(context.workflowType);
+    const url = resolveTriggerWebhookUrl(
+      context.workflowType,
+      context.config.useProductionWebhook,
+      {
+        testUrl: context.config.webhookTestUrl,
+        productionUrl: context.config.webhookProductionUrl,
+      },
+    );
 
-    const body = {
-      [N8N_WEBHOOK.formField]: topic,
-      topic,
+    const body: Record<string, unknown> = {
       workflowId: context.workflowId,
+      workflowType: context.workflowType,
       jobId: meta?.jobId,
       siteId: meta?.siteId ?? undefined,
       callbackUrl: meta?.callbackUrl,
+      errorUrl: meta?.errorUrl,
+      successUrl: meta?.successUrl,
       credentials: Object.fromEntries(
         context.nodeCredentials.map((node) => [
           node.nodeTypeId,
@@ -87,6 +99,11 @@ export class N8nService {
         ]),
       ),
     };
+
+    if (topic) {
+      body[webhook.formField] = topic;
+      body.topic = topic;
+    }
 
     this.logger.log(`POST n8n webhook → ${url}`);
     this.logger.debug(`Payload: ${JSON.stringify(body)}`);

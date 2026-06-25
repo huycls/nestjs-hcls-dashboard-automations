@@ -10,7 +10,20 @@ export type AppId =
   | 'mailchimp'
   | 'zendesk';
 
-export type WorkflowStatus = 'Active' | 'Paused' | 'Draft';
+export type WorkflowStatus =
+  | 'Active'
+  | 'Paused'
+  | 'Draft'
+  | 'Running'
+  | 'Failed';
+
+export const WORKFLOW_STATUS_LABELS: Record<WorkflowStatus, string> = {
+  Active: 'Active',
+  Paused: 'Paused',
+  Draft: 'Draft',
+  Running: 'Đang thực hiện',
+  Failed: 'Thất bại',
+};
 
 export type WorkflowType = 'generate-idea-posts' | 'generate-content-post';
 
@@ -32,18 +45,27 @@ export const NODE_TYPE_IDS: NodeTypeId[] = [
   'add-to-sheet',
 ];
 
+/** n8n webhook path theo workflow type */
+export const WORKFLOW_TYPE_IDS: Record<WorkflowType, string> = {
+  'generate-idea-posts': 'tJzVZLs9LEmdR6WH',
+  'generate-content-post': 'ZEMDqJJ0egeGO4FQ',
+};
+
 export const WORKFLOW_TYPES: Array<{
   id: WorkflowType;
+  typeId: string;
   title: string;
   description: string;
 }> = [
   {
     id: 'generate-idea-posts',
+    typeId: WORKFLOW_TYPE_IDS['generate-idea-posts'],
     title: 'Generate Idea Posts',
     description: 'Brainstorm and generate post ideas for your social channels.',
   },
   {
     id: 'generate-content-post',
+    typeId: WORKFLOW_TYPE_IDS['generate-content-post'],
     title: 'Generate Content Post',
     description: 'Create full content posts ready to publish across platforms.',
   },
@@ -53,6 +75,11 @@ export const WORKFLOW_TYPE_LABELS: Record<WorkflowType, string> = {
   'generate-idea-posts': 'Generate Idea Posts',
   'generate-content-post': 'Generate Content Post',
 };
+
+/** Chỉ generate-idea-posts cần Topic khi trigger n8n */
+export function workflowRequiresTopic(type: WorkflowType): boolean {
+  return type === 'generate-idea-posts';
+}
 
 export type WorkflowConfig = {
   topic: string;

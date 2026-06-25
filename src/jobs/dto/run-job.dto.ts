@@ -1,4 +1,5 @@
 export class RunJobDto {
   workflowId: string;
-  topic: string;
+  /** Bắt buộc với generate-idea-posts; optional với generate-content-post */
+  topic?: string;
 }

@@ -23,6 +23,10 @@ export class WorkflowEntity {
   @Column('text', { default: 'Draft' })
   status: WorkflowStatus;
 
+  /** Status trước khi chạy job — dùng để restore khi hoàn thành */
+  @Column('text', { nullable: true })
+  statusBeforeRun: WorkflowStatus | null;
+
   @Column('int', { default: 0 })
   triggers: number;
 

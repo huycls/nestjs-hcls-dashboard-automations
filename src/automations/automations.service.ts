@@ -1,13 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
-import { DEFAULT_WORKFLOW_CONFIG } from './data';
+import { DEFAULT_WORKFLOW_CONFIG, WORKFLOW_TYPES } from './data';
 import type { WorkflowItem } from './data';
 import type { CreateWorkflowDto } from './dto/create-workflow.dto';
 import type { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import type { UpdateWorkflowConfigDto } from './dto/update-workflow-config.dto';
 import type { UpsertNodeCredentialDto } from './dto/upsert-node-credential.dto';
+import { getDefaultWebhookConfigForType } from './n8n-server';
 import { WorkflowEntity } from './entities/workflow.entity';
 import { WorkflowNodeCredentialEntity } from './entities/workflow-node-credential.entity';
 import {
@@ -60,22 +65,30 @@ export class AutomationsService {
   }
 
   async create(dto: CreateWorkflowDto): Promise<WorkflowItem> {
+    const type = dto.type?.trim() as CreateWorkflowDto['type'];
+
+    if (!WORKFLOW_TYPES.some((item) => item.id === type)) {
+      throw new BadRequestException(`Invalid workflow type: ${dto.type}`);
+    }
+
+    const webhookDefaults = getDefaultWebhookConfigForType(type);
+
     const workflow = this.workflowRepo.create({
       id: `wf-${randomUUID()}`,
       siteId: dto.siteId?.trim() || null,
       name: dto.name.trim(),
-      type: dto.type,
+      type,
       status: 'Draft',
       triggers: 0,
       topic: dto.config?.topic ?? DEFAULT_WORKFLOW_CONFIG.topic,
       useProductionWebhook:
         dto.config?.useProductionWebhook ??
-        DEFAULT_WORKFLOW_CONFIG.useProductionWebhook,
+        webhookDefaults.useProductionWebhook,
       webhookTestUrl:
-        dto.config?.webhookTestUrl ?? DEFAULT_WORKFLOW_CONFIG.webhookTestUrl,
+        dto.config?.webhookTestUrl ?? webhookDefaults.webhookTestUrl,
       webhookProductionUrl:
         dto.config?.webhookProductionUrl ??
-        DEFAULT_WORKFLOW_CONFIG.webhookProductionUrl,
+        webhookDefaults.webhookProductionUrl,
       nodeCredentials: [],
     });
 
@@ -157,6 +170,35 @@ export class AutomationsService {
     const workflow = await this.findEntity(id);
     workflow.triggers += 1;
     await this.workflowRepo.save(workflow);
+  }
+
+  async markAsRunning(id: string): Promise<WorkflowItem> {
+    const workflow = await this.findEntity(id);
+
+    if (workflow.status !== 'Running') {
+      workflow.statusBeforeRun = workflow.status;
+    }
+
+    workflow.status = 'Running';
+    await this.workflowRepo.save(workflow);
+    return this.findOne(id);
+  }
+
+  async markRunFinished(
+    id: string,
+    outcome: 'completed' | 'failed',
+  ): Promise<WorkflowItem> {
+    const workflow = await this.findEntity(id);
+
+    if (outcome === 'completed') {
+      workflow.status = workflow.statusBeforeRun ?? 'Active';
+    } else {
+      workflow.status = 'Failed';
+    }
+
+    workflow.statusBeforeRun = null;
+    await this.workflowRepo.save(workflow);
+    return this.findOne(id);
   }
 
   private async findEntity(id: string): Promise<WorkflowEntity> {

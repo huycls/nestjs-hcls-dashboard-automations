@@ -5,6 +5,7 @@ import type {
   WorkflowConfig,
   WorkflowItem,
   WorkflowNodeCredential,
+  WorkflowType,
 } from './data';
 
 export function toWorkflowItem(entity: WorkflowEntity): WorkflowItem {
@@ -70,6 +71,7 @@ function formatLastModified(date: Date) {
 
 export type WorkflowTriggerContext = {
   workflowId: string;
+  workflowType: WorkflowType;
   siteId: string | null;
   topic: string;
   config: WorkflowConfig;
@@ -84,6 +86,7 @@ export function toTriggerContext(
 
   return {
     workflowId: item.id,
+    workflowType: item.type,
     siteId: item.siteId,
     topic: topicOverride?.trim() || item.config.topic,
     config: item.config,

@@ -5,8 +5,11 @@ import {
   Headers,
   Param,
   Post,
+  Put,
 } from '@nestjs/common';
 import { N8nCallbackDto } from './dto/n8n-callback.dto';
+import { N8nErrorDto } from './dto/n8n-error.dto';
+import { N8nSuccessDto } from './dto/n8n-success.dto';
 import { RunJobDto } from './dto/run-job.dto';
 import { JobsService } from './jobs.service';
 
@@ -25,6 +28,24 @@ export class JobsController {
     @Headers('x-n8n-callback-secret') secret?: string,
   ) {
     return this.jobsService.handleCallback(body, secret);
+  }
+
+  @Post('error')
+  reportError(
+    @Body() body: N8nErrorDto,
+    @Headers('x-n8n-callback-secret') secret?: string,
+  ) {
+    return this.jobsService.handleError(body, secret);
+  }
+
+  /** n8n báo thành công — tăng triggers + restore workflow status */
+  @Post('success')
+  @Put('success')
+  reportSuccess(
+    @Body() body: N8nSuccessDto,
+    @Headers('x-n8n-callback-secret') secret?: string,
+  ) {
+    return this.jobsService.handleSuccess(body, secret);
   }
 
   @Get(':id')
