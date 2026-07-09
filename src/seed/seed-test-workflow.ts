@@ -19,7 +19,7 @@ async function seedTestWorkflow() {
 
   for (const seed of SEED_WORKFLOWS) {
     const webhook = getN8nWebhookForType(seed.type);
-    const existing = (await automationsService.findAll()).find(
+    const existing = (await automationsService.findAll()).workflows.find(
       (workflow) => workflow.name === seed.name,
     );
 

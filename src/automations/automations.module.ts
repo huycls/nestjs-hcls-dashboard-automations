@@ -1,15 +1,21 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { MongooseModule } from '@nestjs/mongoose';
+import {
+  AutomationJob,
+  AutomationJobSchema,
+} from '../jobs/schemas/automation-job.schema';
 import { AutomationsController } from './automations.controller';
 import { AutomationsService } from './automations.service';
-import { WorkflowEntity } from './entities/workflow.entity';
-import { WorkflowNodeCredentialEntity } from './entities/workflow-node-credential.entity';
 import { N8nController } from './n8n.controller';
 import { N8nService } from './n8n.service';
+import { Workflow, WorkflowSchema } from './schemas/workflow.schema';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([WorkflowEntity, WorkflowNodeCredentialEntity]),
+    MongooseModule.forFeature([
+      { name: Workflow.name, schema: WorkflowSchema },
+      { name: AutomationJob.name, schema: AutomationJobSchema },
+    ]),
   ],
   controllers: [AutomationsController, N8nController],
   providers: [AutomationsService, N8nService],

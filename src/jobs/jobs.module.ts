@@ -1,14 +1,14 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { MongooseModule } from '@nestjs/mongoose';
 import { AutomationsModule } from '../automations/automations.module';
 import { isQueueEnabled } from '../config/env';
-import { AutomationJobEntity } from './entities/automation-job.entity';
 import { AUTOMATION_QUEUE } from './jobs.constants';
 import { JobsController } from './jobs.controller';
 import { JobsGateway } from './jobs.gateway';
 import { JobsProcessor } from './jobs.processor';
 import { JobsService } from './jobs.service';
+import { AutomationJob, AutomationJobSchema } from './schemas/automation-job.schema';
 
 @Module({})
 export class JobsModule {
@@ -18,7 +18,9 @@ export class JobsModule {
     return {
       module: JobsModule,
       imports: [
-        TypeOrmModule.forFeature([AutomationJobEntity]),
+        MongooseModule.forFeature([
+          { name: AutomationJob.name, schema: AutomationJobSchema },
+        ]),
         AutomationsModule,
         ...(queueEnabled
           ? [BullModule.registerQueue({ name: AUTOMATION_QUEUE })]

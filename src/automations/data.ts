@@ -95,6 +95,31 @@ export type WorkflowNodeCredential = {
   config?: Record<string, string>;
 };
 
+import type { JobStatus } from '../jobs/jobs.constants';
+
+export type AutomationJobItem = {
+  id: string;
+  siteId: string | null;
+  workflowId: string;
+  topic: string;
+  status: JobStatus;
+  errorMessage: string | null;
+  n8n: {
+    ok: boolean;
+    status: number;
+    message: string;
+    webhookUrl?: string;
+  } | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AutomationsListResponse = {
+  workflows: WorkflowItem[];
+  jobs: AutomationJobItem[];
+};
+
 export type WorkflowItem = {
   id: string;
   siteId: string | null;

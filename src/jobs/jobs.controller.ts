@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { N8nCallbackDto } from './dto/n8n-callback.dto';
 import { N8nErrorDto } from './dto/n8n-error.dto';
@@ -46,6 +47,11 @@ export class JobsController {
     @Headers('x-n8n-callback-secret') secret?: string,
   ) {
     return this.jobsService.handleSuccess(body, secret);
+  }
+
+  @Get()
+  findAll(@Query('workflowId') workflowId?: string) {
+    return this.jobsService.findAll(workflowId);
   }
 
   @Get(':id')

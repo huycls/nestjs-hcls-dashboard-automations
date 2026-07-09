@@ -1,46 +1,46 @@
-import type { WorkflowEntity } from './entities/workflow.entity';
-import type { WorkflowNodeCredentialEntity } from './entities/workflow-node-credential.entity';
+import type { WorkflowDocument } from './schemas/workflow.schema';
+import type { WorkflowNodeCredential } from './schemas/workflow.schema';
 import type {
   AppId,
   WorkflowConfig,
   WorkflowItem,
-  WorkflowNodeCredential,
+  WorkflowNodeCredential as WorkflowNodeCredentialDto,
   WorkflowType,
 } from './data';
 
-export function toWorkflowItem(entity: WorkflowEntity): WorkflowItem {
+export function toWorkflowItem(doc: WorkflowDocument): WorkflowItem {
   return {
-    id: entity.id,
-    siteId: entity.siteId,
-    name: entity.name,
-    type: entity.type,
-    status: entity.status,
-    triggers: entity.triggers,
-    updatedAt: entity.updatedAt.toISOString().slice(0, 10),
-    lastModified: formatLastModified(entity.updatedAt),
-    apps: inferApps(entity.nodeCredentials ?? []),
+    id: doc.id,
+    siteId: doc.siteId ?? null,
+    name: doc.name,
+    type: doc.type,
+    status: doc.status,
+    triggers: doc.triggers,
+    updatedAt: doc.updatedAt.toISOString().slice(0, 10),
+    lastModified: formatLastModified(doc.updatedAt),
+    apps: inferApps(doc.nodeCredentials ?? []),
     config: {
-      topic: entity.topic,
-      useProductionWebhook: entity.useProductionWebhook,
-      webhookTestUrl: entity.webhookTestUrl,
-      webhookProductionUrl: entity.webhookProductionUrl,
+      topic: doc.topic,
+      useProductionWebhook: doc.useProductionWebhook,
+      webhookTestUrl: doc.webhookTestUrl,
+      webhookProductionUrl: doc.webhookProductionUrl,
     },
-    nodeCredentials: (entity.nodeCredentials ?? []).map(toNodeCredential),
+    nodeCredentials: (doc.nodeCredentials ?? []).map(toNodeCredential),
   };
 }
 
 export function toNodeCredential(
-  entity: WorkflowNodeCredentialEntity,
-): WorkflowNodeCredential {
+  node: WorkflowNodeCredential,
+): WorkflowNodeCredentialDto {
   return {
-    id: entity.id,
-    nodeTypeId: entity.nodeTypeId,
-    credentialId: entity.credentialId,
-    config: entity.config ?? undefined,
+    id: node.id,
+    nodeTypeId: node.nodeTypeId,
+    credentialId: node.credentialId,
+    config: node.config ?? undefined,
   };
 }
 
-function inferApps(nodes: WorkflowNodeCredentialEntity[]): AppId[] {
+function inferApps(nodes: WorkflowNodeCredential[]): AppId[] {
   const apps = new Set<AppId>();
 
   for (const node of nodes) {
@@ -75,14 +75,14 @@ export type WorkflowTriggerContext = {
   siteId: string | null;
   topic: string;
   config: WorkflowConfig;
-  nodeCredentials: WorkflowNodeCredential[];
+  nodeCredentials: WorkflowNodeCredentialDto[];
 };
 
 export function toTriggerContext(
-  entity: WorkflowEntity,
+  doc: WorkflowDocument,
   topicOverride?: string,
 ): WorkflowTriggerContext {
-  const item = toWorkflowItem(entity);
+  const item = toWorkflowItem(doc);
 
   return {
     workflowId: item.id,

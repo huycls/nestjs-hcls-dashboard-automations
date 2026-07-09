@@ -1,28 +1,16 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthModule } from './auth/auth.module';
 import { AutomationsModule } from './automations/automations.module';
-import { WorkflowEntity } from './automations/entities/workflow.entity';
-import { WorkflowNodeCredentialEntity } from './automations/entities/workflow-node-credential.entity';
-import { isQueueEnabled } from './config/env';
-import { AutomationJobEntity } from './jobs/entities/automation-job.entity';
+import { getMongoConnectionString, isQueueEnabled } from './config/env';
 import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      type: 'sqljs',
-      location: process.env.DATABASE_PATH ?? 'data/automations.sqlite',
-      autoSave: true,
-      entities: [
-        WorkflowEntity,
-        WorkflowNodeCredentialEntity,
-        AutomationJobEntity,
-      ],
-      synchronize: true,
-    }),
+    MongooseModule.forRoot(getMongoConnectionString()),
     ...(isQueueEnabled()
       ? [
           BullModule.forRoot({
@@ -34,6 +22,7 @@ import { JobsModule } from './jobs/jobs.module';
           }),
         ]
       : []),
+    AuthModule,
     AutomationsModule,
     JobsModule.register(),
   ],

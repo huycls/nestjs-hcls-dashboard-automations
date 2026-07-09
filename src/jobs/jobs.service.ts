@@ -8,16 +8,19 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
-import { In, Repository } from 'typeorm';
+import { Model } from 'mongoose';
 import { AutomationsService } from '../automations/automations.service';
 import type { WorkflowItem } from '../automations/data';
 import { workflowRequiresTopic } from '../automations/data';
 import { N8nService } from '../automations/n8n.service';
 import type { N8nJobContext } from '../automations/n8n.types';
-import { AutomationJobEntity } from './entities/automation-job.entity';
+import {
+  AutomationJob,
+  AutomationJobDocument,
+} from './schemas/automation-job.schema';
 import type { N8nCallbackDto } from './dto/n8n-callback.dto';
 import type { N8nErrorDto } from './dto/n8n-error.dto';
 import type { N8nSuccessDto } from './dto/n8n-success.dto';
@@ -50,8 +53,8 @@ export class JobsService {
   private readonly logger = new Logger(JobsService.name);
 
   constructor(
-    @InjectRepository(AutomationJobEntity)
-    private readonly jobRepo: Repository<AutomationJobEntity>,
+    @InjectModel(AutomationJob.name)
+    private readonly jobModel: Model<AutomationJobDocument>,
     @Optional()
     @InjectQueue(AUTOMATION_QUEUE)
     private readonly automationQueue: Queue<AutomationJobPayload> | undefined,
@@ -160,7 +163,7 @@ export class JobsService {
       return;
     }
 
-    await this.jobRepo.save(job);
+    await job.save();
     this.emit(job);
     this.logger.log(`n8n triggered for job ${job.id} → ${result.webhookUrl}`);
   }
@@ -342,6 +345,16 @@ export class JobsService {
     return { ok: true, job: this.toPublicJob(job), workflow };
   }
 
+  async findAll(workflowId?: string) {
+    const filter = workflowId?.trim() ? { workflowId: workflowId.trim() } : {};
+    const jobs = await this.jobModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .exec();
+
+    return jobs.map((job) => this.toPublicJob(job));
+  }
+
   async findOne(id: string) {
     const job = await this.findEntity(id);
     return this.toPublicJob(job);
@@ -352,7 +365,7 @@ export class JobsService {
     workflowId: string,
     topic: string,
   ) {
-    const job = this.jobRepo.create({
+    const saved = await this.jobModel.create({
       id: `job-${randomUUID()}`,
       siteId,
       workflowId,
@@ -363,29 +376,27 @@ export class JobsService {
       errorMessage: null,
       completedAt: null,
     });
-
-    const saved = await this.jobRepo.save(job);
     this.emit(saved);
     return saved;
   }
 
-  private async updateStatus(job: AutomationJobEntity, status: JobStatus) {
+  private async updateStatus(job: AutomationJobDocument, status: JobStatus) {
     job.status = status;
 
     if (status === 'completed' || status === 'failed') {
       job.completedAt = new Date();
     }
 
-    await this.jobRepo.save(job);
+    await job.save();
     this.emit(job);
   }
 
-  private emit(job: AutomationJobEntity) {
+  private emit(job: AutomationJobDocument) {
     this.jobsGateway.emitJobStatus(this.toPublicJob(job));
   }
 
   private toRunResponse(
-    job: AutomationJobEntity,
+    job: AutomationJobDocument,
     workflow: WorkflowItem,
   ) {
     return {
@@ -394,7 +405,7 @@ export class JobsService {
     };
   }
 
-  private toPublicJob(job: AutomationJobEntity): JobStatusEvent {
+  private toPublicJob(job: AutomationJobDocument): JobStatusEvent {
     const n8n = job.n8nResponse as JobStatusEvent['n8n'];
 
     return {
@@ -411,7 +422,7 @@ export class JobsService {
   }
 
   private async findEntity(id: string) {
-    const job = await this.jobRepo.findOne({ where: { id } });
+    const job = await this.jobModel.findOne({ id }).exec();
 
     if (!job) {
       throw new NotFoundException(`Job ${id} not found`);
@@ -451,9 +462,9 @@ export class JobsService {
   private async resolveJobForN8nReport(
     rawJobId: string,
     workflowId: string,
-  ): Promise<AutomationJobEntity | null> {
+  ): Promise<AutomationJobDocument | null> {
     if (rawJobId.startsWith('job-')) {
-      const job = await this.jobRepo.findOne({ where: { id: rawJobId } });
+      const job = await this.jobModel.findOne({ id: rawJobId }).exec();
       if (job) return job;
     }
 
@@ -461,23 +472,22 @@ export class JobsService {
       return null;
     }
 
-    const activeJobs = await this.jobRepo.find({
-      where: {
+    const activeJob = await this.jobModel
+      .findOne({
         workflowId,
-        status: In(['queued', 'processing']),
-      },
-      order: { createdAt: 'DESC' },
-      take: 1,
-    });
+        status: { $in: ['queued', 'processing'] },
+      })
+      .sort({ createdAt: -1 })
+      .exec();
 
-    if (activeJobs[0]) {
-      return activeJobs[0];
+    if (activeJob) {
+      return activeJob;
     }
 
-    return this.jobRepo.findOne({
-      where: { workflowId },
-      order: { createdAt: 'DESC' },
-    });
+    return this.jobModel
+      .findOne({ workflowId })
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
   private validateCallbackSecret(secret?: string) {

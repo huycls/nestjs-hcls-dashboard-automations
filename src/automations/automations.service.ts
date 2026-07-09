@@ -2,19 +2,27 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
-import { Repository } from 'typeorm';
+import { Model } from 'mongoose';
+import {
+  AutomationJob,
+  AutomationJobDocument,
+} from '../jobs/schemas/automation-job.schema';
 import { DEFAULT_WORKFLOW_CONFIG, WORKFLOW_TYPES } from './data';
-import type { WorkflowItem } from './data';
+import type {
+  AutomationJobItem,
+  AutomationsListResponse,
+  WorkflowItem,
+} from './data';
 import type { CreateWorkflowDto } from './dto/create-workflow.dto';
 import type { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import type { UpdateWorkflowConfigDto } from './dto/update-workflow-config.dto';
 import type { UpsertNodeCredentialDto } from './dto/upsert-node-credential.dto';
 import { getDefaultWebhookConfigForType } from './n8n-server';
-import { WorkflowEntity } from './entities/workflow.entity';
-import { WorkflowNodeCredentialEntity } from './entities/workflow-node-credential.entity';
+import { Workflow, WorkflowDocument } from './schemas/workflow.schema';
 import {
   toTriggerContext,
   toWorkflowItem,
@@ -22,20 +30,46 @@ import {
 } from './workflow.mapper';
 
 @Injectable()
-export class AutomationsService {
+export class AutomationsService implements OnModuleInit {
   constructor(
-    @InjectRepository(WorkflowEntity)
-    private readonly workflowRepo: Repository<WorkflowEntity>,
-    @InjectRepository(WorkflowNodeCredentialEntity)
-    private readonly nodeCredentialRepo: Repository<WorkflowNodeCredentialEntity>,
+    @InjectModel(Workflow.name)
+    private readonly workflowModel: Model<WorkflowDocument>,
+    @InjectModel(AutomationJob.name)
+    private readonly jobModel: Model<AutomationJobDocument>,
   ) {}
 
-  async findAll(): Promise<WorkflowItem[]> {
-    const workflows = await this.workflowRepo.find({
-      order: { updatedAt: 'DESC' },
-    });
+  /** Sparse unique index bỏ qua field absent — không phải null */
+  async onModuleInit() {
+    await Promise.all([
+      this.workflowModel
+        .updateMany({ siteId: null }, { $unset: { siteId: 1 } })
+        .exec(),
+      this.jobModel
+        .updateMany({ siteId: null }, { $unset: { siteId: 1 } })
+        .exec(),
+    ]);
+  }
 
-    return workflows.map(toWorkflowItem);
+  async findAll(): Promise<AutomationsListResponse> {
+    const [workflows, jobs] = await Promise.all([
+      this.workflowModel.find().sort({ updatedAt: -1 }).exec(),
+      this.jobModel.find().sort({ createdAt: -1 }).exec(),
+    ]);
+
+    return {
+      workflows: workflows.map(toWorkflowItem),
+      jobs: jobs.map(toAutomationJobItem),
+    };
+  }
+
+  async findAllJobs(workflowId?: string): Promise<AutomationJobItem[]> {
+    const filter = workflowId?.trim() ? { workflowId: workflowId.trim() } : {};
+    const jobs = await this.jobModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .exec();
+
+    return jobs.map(toAutomationJobItem);
   }
 
   async findOne(id: string): Promise<WorkflowItem> {
@@ -55,7 +89,7 @@ export class AutomationsService {
     siteId: string,
     topicOverride?: string,
   ): Promise<WorkflowTriggerContext> {
-    const workflow = await this.workflowRepo.findOne({ where: { siteId } });
+    const workflow = await this.workflowModel.findOne({ siteId }).exec();
 
     if (!workflow) {
       throw new NotFoundException(`Site ${siteId} not found`);
@@ -73,9 +107,10 @@ export class AutomationsService {
 
     const webhookDefaults = getDefaultWebhookConfigForType(type);
 
-    const workflow = this.workflowRepo.create({
+    const siteId = dto.siteId?.trim();
+    const workflow = await this.workflowModel.create({
       id: `wf-${randomUUID()}`,
-      siteId: dto.siteId?.trim() || null,
+      ...(siteId ? { siteId } : {}),
       name: dto.name.trim(),
       type,
       status: 'Draft',
@@ -92,14 +127,12 @@ export class AutomationsService {
       nodeCredentials: [],
     });
 
-    const saved = await this.workflowRepo.save(workflow);
-
     if (dto.nodeCredentials?.length) {
-      await this.upsertNodeCredentials(saved.id, dto.nodeCredentials);
-      return this.findOne(saved.id);
+      await this.upsertNodeCredentials(workflow.id, dto.nodeCredentials);
+      return this.findOne(workflow.id);
     }
 
-    return toWorkflowItem(saved);
+    return toWorkflowItem(workflow);
   }
 
   async update(id: string, dto: UpdateWorkflowDto): Promise<WorkflowItem> {
@@ -113,7 +146,7 @@ export class AutomationsService {
       workflow.status = dto.status;
     }
 
-    await this.workflowRepo.save(workflow);
+    await workflow.save();
     return this.findOne(id);
   }
 
@@ -134,7 +167,7 @@ export class AutomationsService {
       workflow.webhookProductionUrl = config.webhookProductionUrl;
     }
 
-    await this.workflowRepo.save(workflow);
+    await workflow.save();
     return this.findOne(id);
   }
 
@@ -142,34 +175,42 @@ export class AutomationsService {
     workflowId: string,
     nodes: UpsertNodeCredentialDto[],
   ): Promise<WorkflowItem> {
-    await this.findEntity(workflowId);
+    const workflow = await this.findEntity(workflowId);
 
     for (const node of nodes) {
-      const existing = await this.nodeCredentialRepo.findOne({
-        where: { workflowId, nodeTypeId: node.nodeTypeId },
-      });
+      const existingIndex = workflow.nodeCredentials.findIndex(
+        (item) => item.nodeTypeId === node.nodeTypeId,
+      );
 
-      await this.nodeCredentialRepo.save({
-        id: existing?.id ?? `nc-${randomUUID()}`,
-        workflowId,
+      const credential = {
+        id:
+          existingIndex >= 0
+            ? workflow.nodeCredentials[existingIndex].id
+            : `nc-${randomUUID()}`,
         nodeTypeId: node.nodeTypeId,
         credentialId: node.credentialId,
-        config: node.config ?? null,
-      });
+        config: node.config ?? undefined,
+      };
+
+      if (existingIndex >= 0) {
+        workflow.nodeCredentials[existingIndex] = credential;
+      } else {
+        workflow.nodeCredentials.push(credential);
+      }
     }
 
+    workflow.markModified('nodeCredentials');
+    await workflow.save();
     return this.findOne(workflowId);
   }
 
   async remove(id: string): Promise<void> {
     await this.findEntity(id);
-    await this.workflowRepo.delete({ id });
+    await this.workflowModel.deleteOne({ id }).exec();
   }
 
   async incrementTriggers(id: string): Promise<void> {
-    const workflow = await this.findEntity(id);
-    workflow.triggers += 1;
-    await this.workflowRepo.save(workflow);
+    await this.workflowModel.updateOne({ id }, { $inc: { triggers: 1 } }).exec();
   }
 
   async markAsRunning(id: string): Promise<WorkflowItem> {
@@ -180,7 +221,7 @@ export class AutomationsService {
     }
 
     workflow.status = 'Running';
-    await this.workflowRepo.save(workflow);
+    await workflow.save();
     return this.findOne(id);
   }
 
@@ -197,12 +238,12 @@ export class AutomationsService {
     }
 
     workflow.statusBeforeRun = null;
-    await this.workflowRepo.save(workflow);
+    await workflow.save();
     return this.findOne(id);
   }
 
-  private async findEntity(id: string): Promise<WorkflowEntity> {
-    const workflow = await this.workflowRepo.findOne({ where: { id } });
+  private async findEntity(id: string): Promise<WorkflowDocument> {
+    const workflow = await this.workflowModel.findOne({ id }).exec();
 
     if (!workflow) {
       throw new NotFoundException(`Workflow ${id} not found`);
@@ -210,4 +251,21 @@ export class AutomationsService {
 
     return workflow;
   }
+}
+
+function toAutomationJobItem(doc: AutomationJobDocument): AutomationJobItem {
+  const n8n = doc.n8nResponse as AutomationJobItem['n8n'];
+
+  return {
+    id: doc.id,
+    siteId: doc.siteId ?? null,
+    workflowId: doc.workflowId,
+    topic: doc.topic,
+    status: doc.status,
+    errorMessage: doc.errorMessage,
+    n8n: n8n ?? null,
+    completedAt: doc.completedAt?.toISOString() ?? null,
+    createdAt: doc.createdAt.toISOString(),
+    updatedAt: doc.updatedAt.toISOString(),
+  };
 }

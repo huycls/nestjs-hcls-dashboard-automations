@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { WORKFLOW_TYPES, type WorkflowType } from './data';
 import { AutomationsService } from './automations.service';
@@ -24,9 +25,15 @@ export class AutomationsController {
     private readonly n8nService: N8nService,
   ) {}
 
+  /** Workflows từ `workflows` + lịch sử chạy từ `automation_jobs` */
   @Get()
   findAll() {
     return this.automationsService.findAll();
+  }
+
+  @Get('jobs')
+  findAllJobs(@Query('workflowId') workflowId?: string) {
+    return this.automationsService.findAllJobs(workflowId);
   }
 
   @Get('types')
