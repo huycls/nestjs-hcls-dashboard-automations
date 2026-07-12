@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { Model } from 'mongoose';
 import { AutomationsService } from '../automations/automations.service';
 import type { WorkflowItem } from '../automations/data';
-import { workflowRequiresTopic } from '../automations/data';
+import { getConfigTopic, workflowRequiresTopic } from '../automations/data';
 import { N8nService } from '../automations/n8n.service';
 import type { N8nJobContext } from '../automations/n8n.types';
 import {
@@ -71,7 +71,8 @@ export class JobsService {
     }
 
     const workflow = await this.automationsService.findOne(workflowId);
-    const topic = dto.topic?.trim() ?? '';
+    const topic =
+      dto.topic?.trim() || getConfigTopic(workflow.config) || '';
 
     if (workflowRequiresTopic(workflow.type) && !topic) {
       throw new BadRequestException('topic is required');

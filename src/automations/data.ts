@@ -1,3 +1,5 @@
+import type { JobStatus } from '../jobs/jobs.constants';
+
 export type AppId =
   | 'notion'
   | 'trello'
@@ -81,12 +83,40 @@ export function workflowRequiresTopic(type: WorkflowType): boolean {
   return type === 'generate-idea-posts';
 }
 
-export type WorkflowConfig = {
-  topic: string;
+/** --- Config theo workflow type (hybrid: credential ref + WP siteUrl) --- */
+
+export type WorkflowWebhookConfig = {
   useProductionWebhook: boolean;
   webhookTestUrl: string;
   webhookProductionUrl: string;
 };
+
+/** Google OAuth — ref tới UserCredential.id (type: google-oauth) */
+export type GoogleOAuthConfig = {
+  credentialId: string;
+};
+
+/** generate-idea-posts: Google OAuth + API key (refs tới user credentials) */
+export type GenerateIdeaPostsConfig = WorkflowWebhookConfig & {
+  topic: string;
+  googleOAuth: GoogleOAuthConfig;
+  /** Ref → UserCredential.id (type: api-key) */
+  apiKeyCredentialId: string;
+};
+
+/** generate-content-post: Google OAuth + WordPress credential ref */
+export type GenerateContentPostConfig = WorkflowWebhookConfig & {
+  googleOAuth: GoogleOAuthConfig;
+  /** Ref → UserCredential.id (type: wordpress) */
+  wordpressCredentialId: string;
+};
+
+export type WorkflowConfigByType = {
+  'generate-idea-posts': GenerateIdeaPostsConfig;
+  'generate-content-post': GenerateContentPostConfig;
+};
+
+export type WorkflowConfig = WorkflowConfigByType[WorkflowType];
 
 export type WorkflowNodeCredential = {
   id: string;
@@ -94,8 +124,6 @@ export type WorkflowNodeCredential = {
   credentialId: string;
   config?: Record<string, string>;
 };
-
-import type { JobStatus } from '../jobs/jobs.constants';
 
 export type AutomationJobItem = {
   id: string;
@@ -120,26 +148,65 @@ export type AutomationsListResponse = {
   jobs: AutomationJobItem[];
 };
 
-export type WorkflowItem = {
+type WorkflowItemBase = {
   id: string;
+  userId: string | null;
   siteId: string | null;
   name: string;
-  type: WorkflowType;
   status: WorkflowStatus;
   triggers: number;
   updatedAt: string;
   lastModified: string;
   apps: AppId[];
-  config: WorkflowConfig;
   nodeCredentials: WorkflowNodeCredential[];
 };
 
-export const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
-  topic: '',
+export type WorkflowItem =
+  | (WorkflowItemBase & {
+      type: 'generate-idea-posts';
+      config: GenerateIdeaPostsConfig;
+    })
+  | (WorkflowItemBase & {
+      type: 'generate-content-post';
+      config: GenerateContentPostConfig;
+    });
+
+const DEFAULT_WEBHOOK_CONFIG: WorkflowWebhookConfig = {
   useProductionWebhook: false,
   webhookTestUrl: '',
   webhookProductionUrl: '',
 };
+
+export const DEFAULT_IDEA_POSTS_CONFIG: GenerateIdeaPostsConfig = {
+  ...DEFAULT_WEBHOOK_CONFIG,
+  topic: '',
+  googleOAuth: { credentialId: '' },
+  apiKeyCredentialId: '',
+};
+
+export const DEFAULT_CONTENT_POST_CONFIG: GenerateContentPostConfig = {
+  ...DEFAULT_WEBHOOK_CONFIG,
+  googleOAuth: { credentialId: '' },
+  wordpressCredentialId: '',
+};
+
+export const DEFAULT_WORKFLOW_CONFIG_BY_TYPE: WorkflowConfigByType = {
+  'generate-idea-posts': DEFAULT_IDEA_POSTS_CONFIG,
+  'generate-content-post': DEFAULT_CONTENT_POST_CONFIG,
+};
+
+/** @deprecated Dùng DEFAULT_WORKFLOW_CONFIG_BY_TYPE[type] */
+export const DEFAULT_WORKFLOW_CONFIG = DEFAULT_IDEA_POSTS_CONFIG;
+
+export function getDefaultConfigForType<T extends WorkflowType>(
+  type: T,
+): WorkflowConfigByType[T] {
+  return structuredClone(DEFAULT_WORKFLOW_CONFIG_BY_TYPE[type]);
+}
+
+export function getConfigTopic(config: WorkflowConfig): string {
+  return 'topic' in config ? config.topic : '';
+}
 
 export const DEFAULT_PAGE_SIZE = 10;
 export const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;

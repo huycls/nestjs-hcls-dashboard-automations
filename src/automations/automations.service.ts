@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -7,11 +8,13 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { Model } from 'mongoose';
+import { CredentialsService } from '../credentials/credentials.service';
+import type { UserCredentialItem } from '../credentials/credentials.types';
 import {
   AutomationJob,
   AutomationJobDocument,
 } from '../jobs/schemas/automation-job.schema';
-import { DEFAULT_WORKFLOW_CONFIG, WORKFLOW_TYPES } from './data';
+import { getDefaultConfigForType, WORKFLOW_TYPES } from './data';
 import type {
   AutomationJobItem,
   AutomationsListResponse,
@@ -24,6 +27,8 @@ import type { UpsertNodeCredentialDto } from './dto/upsert-node-credential.dto';
 import { getDefaultWebhookConfigForType } from './n8n-server';
 import { Workflow, WorkflowDocument } from './schemas/workflow.schema';
 import {
+  collectCredentialRefs,
+  mergeWorkflowConfig,
   toTriggerContext,
   toWorkflowItem,
   type WorkflowTriggerContext,
@@ -36,6 +41,7 @@ export class AutomationsService implements OnModuleInit {
     private readonly workflowModel: Model<WorkflowDocument>,
     @InjectModel(AutomationJob.name)
     private readonly jobModel: Model<AutomationJobDocument>,
+    private readonly credentialsService: CredentialsService,
   ) {}
 
   /** Sparse unique index bỏ qua field absent — không phải null */
@@ -50,39 +56,58 @@ export class AutomationsService implements OnModuleInit {
     ]);
   }
 
-  async findAll(): Promise<AutomationsListResponse> {
+  async findAll(userId?: string): Promise<AutomationsListResponse> {
+    const workflowFilter = userId ? { userId } : {};
     const [workflows, jobs] = await Promise.all([
-      this.workflowModel.find().sort({ updatedAt: -1 }).exec(),
+      this.workflowModel.find(workflowFilter).sort({ updatedAt: -1 }).exec(),
       this.jobModel.find().sort({ createdAt: -1 }).exec(),
     ]);
 
+    const items = workflows.map(toWorkflowItem);
+    const workflowIds = new Set(items.map((w) => w.id));
+
     return {
-      workflows: workflows.map(toWorkflowItem),
-      jobs: jobs.map(toAutomationJobItem),
+      workflows: items,
+      jobs: jobs
+        .map(toAutomationJobItem)
+        .filter((job) => !userId || workflowIds.has(job.workflowId)),
     };
   }
 
-  async findAllJobs(workflowId?: string): Promise<AutomationJobItem[]> {
+  async findAllJobs(
+    userId?: string,
+    workflowId?: string,
+  ): Promise<AutomationJobItem[]> {
     const filter = workflowId?.trim() ? { workflowId: workflowId.trim() } : {};
     const jobs = await this.jobModel
       .find(filter)
       .sort({ createdAt: -1 })
       .exec();
 
-    return jobs.map(toAutomationJobItem);
+    const items = jobs.map(toAutomationJobItem);
+    if (!userId) return items;
+
+    const owned = await this.workflowModel
+      .find({ userId })
+      .select({ id: 1 })
+      .lean()
+      .exec();
+    const ownedIds = new Set(owned.map((w) => w.id));
+    return items.filter((job) => ownedIds.has(job.workflowId));
   }
 
-  async findOne(id: string): Promise<WorkflowItem> {
-    const workflow = await this.findEntity(id);
+  async findOne(id: string, userId?: string): Promise<WorkflowItem> {
+    const workflow = await this.findEntityForUser(id, userId);
     return toWorkflowItem(workflow);
   }
 
   async resolveForTrigger(
     workflowId: string,
     topicOverride?: string,
+    userId?: string,
   ): Promise<WorkflowTriggerContext> {
-    const workflow = await this.findEntity(workflowId);
-    return toTriggerContext(workflow, topicOverride);
+    const workflow = await this.findEntityForUser(workflowId, userId);
+    return this.buildTriggerContext(workflow, topicOverride);
   }
 
   async resolveBySiteId(
@@ -95,10 +120,13 @@ export class AutomationsService implements OnModuleInit {
       throw new NotFoundException(`Site ${siteId} not found`);
     }
 
-    return toTriggerContext(workflow, topicOverride);
+    return this.buildTriggerContext(workflow, topicOverride);
   }
 
-  async create(dto: CreateWorkflowDto): Promise<WorkflowItem> {
+  async create(
+    dto: CreateWorkflowDto,
+    userId: string,
+  ): Promise<WorkflowItem> {
     const type = dto.type?.trim() as CreateWorkflowDto['type'];
 
     if (!WORKFLOW_TYPES.some((item) => item.id === type)) {
@@ -106,16 +134,8 @@ export class AutomationsService implements OnModuleInit {
     }
 
     const webhookDefaults = getDefaultWebhookConfigForType(type);
-
-    const siteId = dto.siteId?.trim();
-    const workflow = await this.workflowModel.create({
-      id: `wf-${randomUUID()}`,
-      ...(siteId ? { siteId } : {}),
-      name: dto.name.trim(),
-      type,
-      status: 'Draft',
-      triggers: 0,
-      topic: dto.config?.topic ?? DEFAULT_WORKFLOW_CONFIG.topic,
+    const config = mergeWorkflowConfig(type, getDefaultConfigForType(type), {
+      ...dto.config,
       useProductionWebhook:
         dto.config?.useProductionWebhook ??
         webhookDefaults.useProductionWebhook,
@@ -124,19 +144,41 @@ export class AutomationsService implements OnModuleInit {
       webhookProductionUrl:
         dto.config?.webhookProductionUrl ??
         webhookDefaults.webhookProductionUrl,
+    });
+
+    await this.assertCredentialRefsOwnedByUser(userId, config);
+
+    const siteId = dto.siteId?.trim();
+    const workflow = await this.workflowModel.create({
+      id: `wf-${randomUUID()}`,
+      userId,
+      ...(siteId ? { siteId } : {}),
+      name: dto.name.trim(),
+      type,
+      status: 'Draft',
+      triggers: 0,
+      config,
       nodeCredentials: [],
     });
 
     if (dto.nodeCredentials?.length) {
-      await this.upsertNodeCredentials(workflow.id, dto.nodeCredentials);
-      return this.findOne(workflow.id);
+      await this.upsertNodeCredentials(
+        workflow.id,
+        dto.nodeCredentials,
+        userId,
+      );
+      return this.findOne(workflow.id, userId);
     }
 
     return toWorkflowItem(workflow);
   }
 
-  async update(id: string, dto: UpdateWorkflowDto): Promise<WorkflowItem> {
-    const workflow = await this.findEntity(id);
+  async update(
+    id: string,
+    dto: UpdateWorkflowDto,
+    userId?: string,
+  ): Promise<WorkflowItem> {
+    const workflow = await this.findEntityForUser(id, userId);
 
     if (dto.name !== undefined) {
       workflow.name = dto.name.trim();
@@ -147,35 +189,36 @@ export class AutomationsService implements OnModuleInit {
     }
 
     await workflow.save();
-    return this.findOne(id);
+    return this.findOne(id, userId);
   }
 
   async updateConfig(
     id: string,
     config: UpdateWorkflowConfigDto,
+    userId?: string,
   ): Promise<WorkflowItem> {
-    const workflow = await this.findEntity(id);
+    const workflow = await this.findEntityForUser(id, userId);
+    const current = toWorkflowItem(workflow).config;
+    const next = mergeWorkflowConfig(workflow.type, current, config);
 
-    if (config.topic !== undefined) workflow.topic = config.topic;
-    if (config.useProductionWebhook !== undefined) {
-      workflow.useProductionWebhook = config.useProductionWebhook;
+    const ownerId = userId ?? workflow.userId;
+    if (ownerId) {
+      await this.assertCredentialRefsOwnedByUser(ownerId, next);
     }
-    if (config.webhookTestUrl !== undefined) {
-      workflow.webhookTestUrl = config.webhookTestUrl;
-    }
-    if (config.webhookProductionUrl !== undefined) {
-      workflow.webhookProductionUrl = config.webhookProductionUrl;
-    }
+
+    workflow.config = next;
+    workflow.markModified('config');
 
     await workflow.save();
-    return this.findOne(id);
+    return this.findOne(id, userId);
   }
 
   async upsertNodeCredentials(
     workflowId: string,
     nodes: UpsertNodeCredentialDto[],
+    userId?: string,
   ): Promise<WorkflowItem> {
-    const workflow = await this.findEntity(workflowId);
+    const workflow = await this.findEntityForUser(workflowId, userId);
 
     for (const node of nodes) {
       const existingIndex = workflow.nodeCredentials.findIndex(
@@ -201,11 +244,11 @@ export class AutomationsService implements OnModuleInit {
 
     workflow.markModified('nodeCredentials');
     await workflow.save();
-    return this.findOne(workflowId);
+    return this.findOne(workflowId, userId);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findEntity(id);
+  async remove(id: string, userId?: string): Promise<void> {
+    await this.findEntityForUser(id, userId);
     await this.workflowModel.deleteOne({ id }).exec();
   }
 
@@ -240,6 +283,46 @@ export class AutomationsService implements OnModuleInit {
     workflow.statusBeforeRun = null;
     await workflow.save();
     return this.findOne(id);
+  }
+
+  private async buildTriggerContext(
+    workflow: WorkflowDocument,
+    topicOverride?: string,
+  ): Promise<WorkflowTriggerContext> {
+    const item = toWorkflowItem(workflow);
+    const refs = collectCredentialRefs(item.config);
+    const ownerId = workflow.userId;
+
+    let resolvedCredentials: UserCredentialItem[] = [];
+
+    if (ownerId && refs.length > 0) {
+      const map = await this.credentialsService.resolveForUser(ownerId, refs);
+      resolvedCredentials = [...map.values()];
+    }
+
+    return toTriggerContext(workflow, topicOverride, resolvedCredentials);
+  }
+
+  private async assertCredentialRefsOwnedByUser(
+    userId: string,
+    config: ReturnType<typeof mergeWorkflowConfig>,
+  ) {
+    const refs = collectCredentialRefs(config);
+    if (refs.length === 0) return;
+    await this.credentialsService.resolveForUser(userId, refs);
+  }
+
+  private async findEntityForUser(
+    id: string,
+    userId?: string,
+  ): Promise<WorkflowDocument> {
+    const workflow = await this.findEntity(id);
+
+    if (userId && workflow.userId && workflow.userId !== userId) {
+      throw new ForbiddenException(`Workflow ${id} does not belong to user`);
+    }
+
+    return workflow;
   }
 
   private async findEntity(id: string): Promise<WorkflowDocument> {

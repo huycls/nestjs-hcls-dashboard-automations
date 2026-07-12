@@ -1,11 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, SchemaTypes } from 'mongoose';
 import {
   NODE_TYPE_IDS,
   type NodeTypeId,
   type WorkflowStatus,
   type WorkflowType,
 } from '../data';
+import type { WorkflowConfigDocument } from './workflow-config.schema';
 
 export type WorkflowDocument = HydratedDocument<Workflow>;
 
@@ -45,6 +46,10 @@ export class Workflow {
   @Prop({ required: true, unique: true })
   id: string;
 
+  /** Owner — JWT sub / User._id.toString(); credentials resolve từ user này */
+  @Prop({ type: String, index: true })
+  userId?: string;
+
   @Prop({ type: String })
   siteId?: string;
 
@@ -63,17 +68,13 @@ export class Workflow {
   @Prop({ default: 0, min: 0 })
   triggers: number;
 
-  @Prop({ default: '' })
-  topic: string;
-
-  @Prop({ default: false })
-  useProductionWebhook: boolean;
-
-  @Prop({ default: '' })
-  webhookTestUrl: string;
-
-  @Prop({ default: '' })
-  webhookProductionUrl: string;
+  /**
+   * Config theo `type` — chỉ chứa ref tới user_credentials.id
+   * - generate-idea-posts → googleOAuth.credentialId + apiKeyCredentialId
+   * - generate-content-post → googleOAuth.credentialId + wordpressCredentialId
+   */
+  @Prop({ type: SchemaTypes.Mixed, required: true })
+  config: WorkflowConfigDocument;
 
   @Prop({ type: [WorkflowNodeCredentialSchema], default: [] })
   nodeCredentials: WorkflowNodeCredential[];
@@ -84,7 +85,7 @@ export class Workflow {
 
 export const WorkflowSchema = SchemaFactory.createForClass(Workflow);
 
-WorkflowSchema.index({ id: 1 }, { unique: true });
+WorkflowSchema.index({ userId: 1, updatedAt: -1 });
 WorkflowSchema.index({ siteId: 1 }, { unique: true, sparse: true });
 WorkflowSchema.index({ type: 1 });
 WorkflowSchema.index({ updatedAt: -1 });

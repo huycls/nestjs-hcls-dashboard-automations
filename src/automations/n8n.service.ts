@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { UserCredentialItem } from '../credentials/credentials.types';
 import { workflowRequiresTopic } from './data';
 import { resolveTriggerWebhookUrl, getN8nWebhookForType } from './n8n-server';
 import type { N8nJobContext, TriggerWebhookResult } from './n8n.types';
@@ -24,6 +25,59 @@ function formatN8nError(responseText: string, status: number, url: string) {
   }
 
   return `n8n production webhook ${status}: bật Active workflow (toggle góc phải editor).`;
+}
+
+function buildCredentialsPayload(
+  context: WorkflowTriggerContext,
+): Record<string, { credentialId: string; config: Record<string, string> }> {
+  const credentials: Record<
+    string,
+    { credentialId: string; config: Record<string, string> }
+  > = Object.fromEntries(
+    context.nodeCredentials.map((node) => [
+      node.nodeTypeId,
+      {
+        credentialId: resolveN8nId(context.resolvedCredentials, node.credentialId),
+        config: node.config ?? {},
+      },
+    ]),
+  );
+
+  const byId = new Map(
+    context.resolvedCredentials.map((item) => [item.id, item]),
+  );
+
+  const google = byId.get(context.config.googleOAuth.credentialId);
+  if (google?.n8nCredentialId) {
+    credentials['google-oauth'] = {
+      credentialId: google.n8nCredentialId,
+      config: {},
+    };
+  }
+
+  if (
+    context.workflowType === 'generate-idea-posts' &&
+    'apiKeyCredentialId' in context.config
+  ) {
+    const apiKey = byId.get(context.config.apiKeyCredentialId);
+    if (apiKey?.n8nCredentialId) {
+      credentials['api-key'] = {
+        credentialId: apiKey.n8nCredentialId,
+        config: {},
+      };
+    }
+  }
+
+  return credentials;
+}
+
+/** Node credentialId có thể là UserCredential.id hoặc n8n id legacy */
+function resolveN8nId(
+  resolved: UserCredentialItem[],
+  credentialId: string,
+): string {
+  const match = resolved.find((item) => item.id === credentialId);
+  return match?.n8nCredentialId ?? credentialId;
 }
 
 @Injectable()
@@ -81,24 +135,43 @@ export class N8nService {
       },
     );
 
+    const byId = new Map(
+      context.resolvedCredentials.map((item) => [item.id, item]),
+    );
+
     const body: Record<string, unknown> = {
       workflowId: context.workflowId,
       workflowType: context.workflowType,
+      userId: context.userId ?? undefined,
       jobId: meta?.jobId,
       siteId: meta?.siteId ?? undefined,
       callbackUrl: meta?.callbackUrl,
       errorUrl: meta?.errorUrl,
       successUrl: meta?.successUrl,
-      credentials: Object.fromEntries(
-        context.nodeCredentials.map((node) => [
-          node.nodeTypeId,
-          {
-            credentialId: node.credentialId,
-            config: node.config ?? {},
-          },
-        ]),
-      ),
+      credentials: buildCredentialsPayload(context),
     };
+
+    const google = byId.get(context.config.googleOAuth.credentialId);
+    if (google) {
+      body.googleOAuth = {
+        credentialId: google.n8nCredentialId ?? google.id,
+        label: google.label,
+      };
+    }
+
+    if (
+      context.workflowType === 'generate-content-post' &&
+      'wordpressCredentialId' in context.config
+    ) {
+      const wp = byId.get(context.config.wordpressCredentialId);
+      if (wp) {
+        body.wordpress = {
+          credentialId: wp.id,
+          label: wp.label,
+          ...(wp.data ?? {}),
+        };
+      }
+    }
 
     if (topic) {
       body[webhook.formField] = topic;
