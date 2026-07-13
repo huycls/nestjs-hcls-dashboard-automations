@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { AuthModule } from '../auth/auth.module';
+import { CredentialsModule } from '../credentials/credentials.module';
 import {
   AutomationJob,
   AutomationJobSchema,
@@ -12,6 +14,8 @@ import { Workflow, WorkflowSchema } from './schemas/workflow.schema';
 
 @Module({
   imports: [
+    AuthModule,
+    CredentialsModule,
     MongooseModule.forFeature([
       { name: Workflow.name, schema: WorkflowSchema },
       { name: AutomationJob.name, schema: AutomationJobSchema },

@@ -7,7 +7,11 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { UserDocument } from '../auth/schemas/user.schema';
 import { WORKFLOW_TYPES, type WorkflowType } from './data';
 import { AutomationsService } from './automations.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
@@ -20,21 +24,28 @@ import { N8nService } from './n8n.service';
 import { WORKFLOW_TEMPLATES } from './workflow-templates';
 
 @Controller('automations')
+@UseGuards(JwtAuthGuard)
 export class AutomationsController {
   constructor(
     private readonly automationsService: AutomationsService,
     private readonly n8nService: N8nService,
   ) {}
 
-  /** Workflows từ `workflows` + lịch sử chạy từ `automation_jobs` */
+  /** Workflows của user + lịch sử chạy liên quan */
   @Get()
-  findAll() {
-    return this.automationsService.findAll();
+  findAll(@CurrentUser() user: UserDocument) {
+    return this.automationsService.findAll(user._id.toString());
   }
 
   @Get('jobs')
-  findAllJobs(@Query('workflowId') workflowId?: string) {
-    return this.automationsService.findAllJobs(workflowId);
+  findAllJobs(
+    @CurrentUser() user: UserDocument,
+    @Query('workflowId') workflowId?: string,
+  ) {
+    return this.automationsService.findAllJobs(
+      user._id.toString(),
+      workflowId,
+    );
   }
 
   @Get('types')
@@ -52,12 +63,16 @@ export class AutomationsController {
     return WORKFLOW_TEMPLATES[type];
   }
 
-  /** Web chỉ cần gửi workflowId — NestJS tự lookup config + credentials từ DB */
+  /** Web chỉ cần gửi workflowId — Nest resolve credentials từ user owner */
   @Post('trigger')
-  async trigger(@Body() body: TriggerWorkflowDto) {
+  async trigger(
+    @CurrentUser() user: UserDocument,
+    @Body() body: TriggerWorkflowDto,
+  ) {
     const context = await this.automationsService.resolveForTrigger(
       body.workflowId,
       body.topic,
+      user._id.toString(),
     );
 
     const result = await this.n8nService.triggerWorkflow(context);
@@ -70,34 +85,51 @@ export class AutomationsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.automationsService.findOne(id);
+  findOne(@CurrentUser() user: UserDocument, @Param('id') id: string) {
+    return this.automationsService.findOne(id, user._id.toString());
   }
 
   @Post()
-  create(@Body() body: CreateWorkflowDto) {
-    return this.automationsService.create(body);
+  create(
+    @CurrentUser() user: UserDocument,
+    @Body() body: CreateWorkflowDto,
+  ) {
+    return this.automationsService.create(body, user._id.toString());
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: UpdateWorkflowDto) {
-    return this.automationsService.update(id, body);
+  update(
+    @CurrentUser() user: UserDocument,
+    @Param('id') id: string,
+    @Body() body: UpdateWorkflowDto,
+  ) {
+    return this.automationsService.update(id, body, user._id.toString());
   }
 
   @Patch(':id/config')
   updateConfig(
+    @CurrentUser() user: UserDocument,
     @Param('id') id: string,
     @Body() config: UpdateWorkflowConfigDto,
   ) {
-    return this.automationsService.updateConfig(id, config);
+    return this.automationsService.updateConfig(
+      id,
+      config,
+      user._id.toString(),
+    );
   }
 
   @Patch(':id/node-credentials')
   upsertNodeCredentials(
+    @CurrentUser() user: UserDocument,
     @Param('id') id: string,
     @Body() nodes: UpsertNodeCredentialDto[],
   ) {
-    return this.automationsService.upsertNodeCredentials(id, nodes);
+    return this.automationsService.upsertNodeCredentials(
+      id,
+      nodes,
+      user._id.toString(),
+    );
   }
 
   /** Save FE node config (topic + credentials) — load lại mỗi lần vào editor */
@@ -110,18 +142,22 @@ export class AutomationsController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.automationsService.remove(id).then(() => ({ ok: true }));
+  remove(@CurrentUser() user: UserDocument, @Param('id') id: string) {
+    return this.automationsService
+      .remove(id, user._id.toString())
+      .then(() => ({ ok: true }));
   }
 
   @Post(':id/trigger')
   async triggerById(
+    @CurrentUser() user: UserDocument,
     @Param('id') id: string,
     @Body() body: Pick<TriggerWorkflowDto, 'topic'>,
   ) {
     const context = await this.automationsService.resolveForTrigger(
       id,
       body.topic,
+      user._id.toString(),
     );
 
     const result = await this.n8nService.triggerWorkflow(context);
