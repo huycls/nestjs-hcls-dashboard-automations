@@ -15,6 +15,7 @@ import { TriggerWorkflowDto } from './dto/trigger-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import { UpdateWorkflowConfigDto } from './dto/update-workflow-config.dto';
 import { UpsertNodeCredentialDto } from './dto/upsert-node-credential.dto';
+import { UpdateNodeConfigDto } from './dto/update-node-config.dto';
 import { N8nService } from './n8n.service';
 import { WORKFLOW_TEMPLATES } from './workflow-templates';
 
@@ -97,6 +98,15 @@ export class AutomationsController {
     @Body() nodes: UpsertNodeCredentialDto[],
   ) {
     return this.automationsService.upsertNodeCredentials(id, nodes);
+  }
+
+  /** Save FE node config (topic + credentials) — load lại mỗi lần vào editor */
+  @Patch(':id/node-config')
+  updateNodeConfig(
+    @Param('id') id: string,
+    @Body() body: UpdateNodeConfigDto,
+  ) {
+    return this.automationsService.updateNodeConfig(id, body);
   }
 
   @Delete(':id')

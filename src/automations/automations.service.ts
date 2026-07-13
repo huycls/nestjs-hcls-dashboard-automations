@@ -21,13 +21,16 @@ import type { CreateWorkflowDto } from './dto/create-workflow.dto';
 import type { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import type { UpdateWorkflowConfigDto } from './dto/update-workflow-config.dto';
 import type { UpsertNodeCredentialDto } from './dto/upsert-node-credential.dto';
+import type { UpdateNodeConfigDto } from './dto/update-node-config.dto';
 import { getDefaultWebhookConfigForType } from './n8n-server';
 import { Workflow, WorkflowDocument } from './schemas/workflow.schema';
 import {
   toTriggerContext,
+  toUiCredentials,
   toWorkflowItem,
   type WorkflowTriggerContext,
 } from './workflow.mapper';
+import type { NodeTypeId } from './data';
 
 @Injectable()
 export class AutomationsService implements OnModuleInit {
@@ -125,6 +128,11 @@ export class AutomationsService implements OnModuleInit {
         dto.config?.webhookProductionUrl ??
         webhookDefaults.webhookProductionUrl,
       nodeCredentials: [],
+      credentials: {
+        openRouterApiKey: '',
+        model: '',
+        spreadsheetId: '',
+      },
     });
 
     if (dto.nodeCredentials?.length) {
@@ -202,6 +210,84 @@ export class AutomationsService implements OnModuleInit {
     workflow.markModified('nodeCredentials');
     await workflow.save();
     return this.findOne(workflowId);
+  }
+
+  /**
+   * Save FE node config (topic + Approach C credentials).
+   * Also mirrors into nodeCredentials.config so n8n payload stays in sync.
+   */
+  async updateNodeConfig(
+    workflowId: string,
+    dto: UpdateNodeConfigDto,
+  ): Promise<WorkflowItem> {
+    const workflow = await this.findEntity(workflowId);
+
+    if (!dto.credentials || typeof dto.credentials !== 'object') {
+      throw new BadRequestException('credentials is required');
+    }
+
+    const credentials = toUiCredentials(dto.credentials);
+
+    if (dto.topic !== undefined) {
+      workflow.topic = dto.topic.trim();
+    }
+
+    workflow.credentials = credentials;
+    workflow.markModified('credentials');
+
+    const openRouterConfig = {
+      apiKey: credentials.openRouterApiKey,
+      model: credentials.model,
+    };
+    const sheetConfig = credentials.spreadsheetId
+      ? { spreadsheetId: credentials.spreadsheetId }
+      : undefined;
+
+    this.upsertNodeCredentialLocal(workflow, 'openrouter-model', 'ui-openrouter', openRouterConfig);
+    this.upsertNodeCredentialLocal(workflow, 'gemini-model', 'ui-openrouter', openRouterConfig);
+    this.upsertNodeCredentialLocal(
+      workflow,
+      'add-to-sheet',
+      'ui-google',
+      sheetConfig,
+    );
+    this.upsertNodeCredentialLocal(
+      workflow,
+      'google-sheet',
+      'ui-google',
+      sheetConfig,
+    );
+
+    workflow.markModified('nodeCredentials');
+    await workflow.save();
+    return this.findOne(workflowId);
+  }
+
+  private upsertNodeCredentialLocal(
+    workflow: WorkflowDocument,
+    nodeTypeId: NodeTypeId,
+    credentialId: string,
+    config?: Record<string, string>,
+  ) {
+    const existingIndex = workflow.nodeCredentials.findIndex(
+      (item) => item.nodeTypeId === nodeTypeId,
+    );
+
+    const credential = {
+      id:
+        existingIndex >= 0
+          ? workflow.nodeCredentials[existingIndex].id
+          : `nc-${randomUUID()}`,
+      nodeTypeId,
+      credentialId,
+      config,
+    };
+
+    if (existingIndex >= 0) {
+      workflow.nodeCredentials[existingIndex] = credential;
+    } else {
+      workflow.nodeCredentials.push(credential);
+    }
   }
 
   async remove(id: string): Promise<void> {

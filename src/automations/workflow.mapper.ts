@@ -6,7 +6,9 @@ import type {
   WorkflowItem,
   WorkflowNodeCredential as WorkflowNodeCredentialDto,
   WorkflowType,
+  WorkflowUiCredentials,
 } from './data';
+import { DEFAULT_WORKFLOW_UI_CREDENTIALS } from './data';
 
 export function toWorkflowItem(doc: WorkflowDocument): WorkflowItem {
   return {
@@ -25,7 +27,18 @@ export function toWorkflowItem(doc: WorkflowDocument): WorkflowItem {
       webhookTestUrl: doc.webhookTestUrl,
       webhookProductionUrl: doc.webhookProductionUrl,
     },
+    credentials: toUiCredentials(doc.credentials),
     nodeCredentials: (doc.nodeCredentials ?? []).map(toNodeCredential),
+  };
+}
+
+export function toUiCredentials(
+  credentials?: Partial<WorkflowUiCredentials> | null,
+): WorkflowUiCredentials {
+  return {
+    openRouterApiKey: credentials?.openRouterApiKey?.trim() ?? '',
+    model: credentials?.model?.trim() ?? '',
+    spreadsheetId: credentials?.spreadsheetId?.trim() ?? '',
   };
 }
 
@@ -75,6 +88,7 @@ export type WorkflowTriggerContext = {
   siteId: string | null;
   topic: string;
   config: WorkflowConfig;
+  credentials: WorkflowUiCredentials;
   nodeCredentials: WorkflowNodeCredentialDto[];
 };
 
@@ -90,6 +104,7 @@ export function toTriggerContext(
     siteId: item.siteId,
     topic: topicOverride?.trim() || item.config.topic,
     config: item.config,
+    credentials: item.credentials ?? DEFAULT_WORKFLOW_UI_CREDENTIALS,
     nodeCredentials: item.nodeCredentials,
   };
 }

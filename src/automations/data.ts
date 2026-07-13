@@ -95,6 +95,19 @@ export type WorkflowNodeCredential = {
   config?: Record<string, string>;
 };
 
+/** Shared credentials from FE node config (Approach C) */
+export type WorkflowUiCredentials = {
+  openRouterApiKey: string;
+  model: string;
+  spreadsheetId: string;
+};
+
+export const DEFAULT_WORKFLOW_UI_CREDENTIALS: WorkflowUiCredentials = {
+  openRouterApiKey: '',
+  model: '',
+  spreadsheetId: '',
+};
+
 import type { JobStatus } from '../jobs/jobs.constants';
 
 export type AutomationJobItem = {
@@ -131,6 +144,7 @@ export type WorkflowItem = {
   lastModified: string;
   apps: AppId[];
   config: WorkflowConfig;
+  credentials: WorkflowUiCredentials;
   nodeCredentials: WorkflowNodeCredential[];
 };
 

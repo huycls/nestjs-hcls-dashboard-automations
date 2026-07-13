@@ -89,15 +89,21 @@ export class N8nService {
       callbackUrl: meta?.callbackUrl,
       errorUrl: meta?.errorUrl,
       successUrl: meta?.successUrl,
-      credentials: Object.fromEntries(
-        context.nodeCredentials.map((node) => [
-          node.nodeTypeId,
-          {
-            credentialId: node.credentialId,
-            config: node.config ?? {},
-          },
-        ]),
-      ),
+      credentials: {
+        ...Object.fromEntries(
+          context.nodeCredentials.map((node) => [
+            node.nodeTypeId,
+            {
+              credentialId: node.credentialId,
+              config: node.config ?? {},
+            },
+          ]),
+        ),
+        // Approach C — flat fields for n8n expressions
+        openRouterApiKey: context.credentials?.openRouterApiKey ?? '',
+        model: context.credentials?.model ?? '',
+        spreadsheetId: context.credentials?.spreadsheetId ?? '',
+      },
     };
 
     if (topic) {

@@ -27,6 +27,22 @@ export class WorkflowNodeCredential {
 export const WorkflowNodeCredentialSchema =
   SchemaFactory.createForClass(WorkflowNodeCredential);
 
+/** Shared UI credentials (Approach C) — persisted for editor save/load */
+@Schema({ _id: false })
+export class WorkflowUiCredentials {
+  @Prop({ default: '' })
+  openRouterApiKey: string;
+
+  @Prop({ default: '' })
+  model: string;
+
+  @Prop({ default: '' })
+  spreadsheetId: string;
+}
+
+export const WorkflowUiCredentialsSchema =
+  SchemaFactory.createForClass(WorkflowUiCredentials);
+
 const WORKFLOW_STATUSES: WorkflowStatus[] = [
   'Active',
   'Paused',
@@ -77,6 +93,16 @@ export class Workflow {
 
   @Prop({ type: [WorkflowNodeCredentialSchema], default: [] })
   nodeCredentials: WorkflowNodeCredential[];
+
+  @Prop({
+    type: WorkflowUiCredentialsSchema,
+    default: () => ({
+      openRouterApiKey: '',
+      model: '',
+      spreadsheetId: '',
+    }),
+  })
+  credentials: WorkflowUiCredentials;
 
   createdAt: Date;
   updatedAt: Date;
