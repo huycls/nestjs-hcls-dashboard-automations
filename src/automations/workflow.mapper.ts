@@ -3,13 +3,19 @@ import type { WorkflowDocument } from './schemas/workflow.schema';
 import type { WorkflowNodeCredential } from './schemas/workflow.schema';
 import type {
   AppId,
+  GenerateContentPostConfig,
+  GenerateIdeaPostsConfig,
   WorkflowConfig,
   WorkflowItem,
   WorkflowNodeCredential as WorkflowNodeCredentialDto,
   WorkflowType,
   WorkflowUiCredentials,
 } from './data';
-import { DEFAULT_WORKFLOW_UI_CREDENTIALS } from './data';
+import {
+  DEFAULT_WORKFLOW_UI_CREDENTIALS,
+  getConfigTopic,
+  getDefaultConfigForType,
+} from './data';
 
 export function toWorkflowItem(doc: WorkflowDocument): WorkflowItem {
   const base = {
@@ -21,13 +27,7 @@ export function toWorkflowItem(doc: WorkflowDocument): WorkflowItem {
     triggers: doc.triggers,
     updatedAt: doc.updatedAt.toISOString().slice(0, 10),
     lastModified: formatLastModified(doc.updatedAt),
-    apps: inferApps(doc.nodeCredentials ?? []),
-    config: {
-      topic: doc.topic,
-      useProductionWebhook: doc.useProductionWebhook,
-      webhookTestUrl: doc.webhookTestUrl,
-      webhookProductionUrl: doc.webhookProductionUrl,
-    },
+    apps: inferApps(doc),
     credentials: toUiCredentials(doc.credentials),
     nodeCredentials: (doc.nodeCredentials ?? []).map(toNodeCredential),
   };

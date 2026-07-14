@@ -12,6 +12,7 @@ import type { JobStatus } from './jobs.constants';
 export type JobStatusEvent = {
   id: string;
   siteId: string | null;
+  userId: string | null;
   workflowId: string;
   topic: string;
   status: JobStatus;
@@ -40,6 +41,10 @@ export class JobsGateway {
     if (job.siteId) {
       this.server.to(`site:${job.siteId}`).emit('job:status', job);
     }
+
+    if (job.userId) {
+      this.server.to(`user:${job.userId}`).emit('job:status', job);
+    }
   }
 
   @SubscribeMessage('subscribe:job')
@@ -58,5 +63,14 @@ export class JobsGateway {
   ) {
     client.join(`site:${siteId}`);
     return { ok: true, room: `site:${siteId}` };
+  }
+
+  @SubscribeMessage('subscribe:user')
+  handleSubscribeUser(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() userId: string,
+  ) {
+    client.join(`user:${userId}`);
+    return { ok: true, room: `user:${userId}` };
   }
 }

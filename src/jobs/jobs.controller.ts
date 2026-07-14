@@ -7,7 +7,11 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { UserDocument } from '../auth/schemas/user.schema';
 import { N8nCallbackDto } from './dto/n8n-callback.dto';
 import { N8nErrorDto } from './dto/n8n-error.dto';
 import { N8nSuccessDto } from './dto/n8n-success.dto';
@@ -19,8 +23,9 @@ export class JobsController {
   constructor(private readonly jobsService: JobsService) {}
 
   @Post('run')
-  run(@Body() body: RunJobDto) {
-    return this.jobsService.run(body);
+  @UseGuards(JwtAuthGuard)
+  run(@CurrentUser() user: UserDocument, @Body() body: RunJobDto) {
+    return this.jobsService.run(body, user._id.toString());
   }
 
   @Post('callback')
@@ -50,12 +55,17 @@ export class JobsController {
   }
 
   @Get()
-  findAll(@Query('workflowId') workflowId?: string) {
-    return this.jobsService.findAll(workflowId);
+  @UseGuards(JwtAuthGuard)
+  findAll(
+    @CurrentUser() user: UserDocument,
+    @Query('workflowId') workflowId?: string,
+  ) {
+    return this.jobsService.findAll(user._id.toString(), workflowId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.jobsService.findOne(id);
+  @UseGuards(JwtAuthGuard)
+  findOne(@CurrentUser() user: UserDocument, @Param('id') id: string) {
+    return this.jobsService.findOne(id, user._id.toString());
   }
 }

@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -63,14 +64,18 @@ export class JobsService {
     private readonly jobsGateway: JobsGateway,
   ) {}
 
-  async run(dto: RunJobDto) {
+  async run(dto: RunJobDto, userId: string) {
     const workflowId = dto.workflowId?.trim();
 
     if (!workflowId) {
       throw new BadRequestException('workflowId is required');
     }
 
-    const workflow = await this.automationsService.findOne(workflowId);
+    if (!userId?.trim()) {
+      throw new BadRequestException('userId is required');
+    }
+
+    const workflow = await this.automationsService.findOne(workflowId, userId);
     const topic =
       dto.topic?.trim() || getConfigTopic(workflow.config) || '';
 
@@ -81,13 +86,17 @@ export class JobsService {
     const context = await this.automationsService.resolveForTrigger(
       workflowId,
       topic || undefined,
+      userId,
     );
 
     const runningWorkflow =
       await this.automationsService.markAsRunning(workflowId);
 
+    const ownerId = workflow.userId ?? userId;
+
     const job = await this.createJob(
       context.siteId,
+      ownerId,
       context.workflowId,
       topic,
     );
@@ -346,8 +355,13 @@ export class JobsService {
     return { ok: true, job: this.toPublicJob(job), workflow };
   }
 
-  async findAll(workflowId?: string) {
-    const filter = workflowId?.trim() ? { workflowId: workflowId.trim() } : {};
+  async findAll(userId: string, workflowId?: string) {
+    const filter: Record<string, unknown> = { userId };
+
+    if (workflowId?.trim()) {
+      filter.workflowId = workflowId.trim();
+    }
+
     const jobs = await this.jobModel
       .find(filter)
       .sort({ createdAt: -1 })
@@ -356,19 +370,21 @@ export class JobsService {
     return jobs.map((job) => this.toPublicJob(job));
   }
 
-  async findOne(id: string) {
-    const job = await this.findEntity(id);
+  async findOne(id: string, userId: string) {
+    const job = await this.findEntityForUser(id, userId);
     return this.toPublicJob(job);
   }
 
   private async createJob(
     siteId: string | null,
+    userId: string,
     workflowId: string,
     topic: string,
   ) {
     const saved = await this.jobModel.create({
       id: `job-${randomUUID()}`,
       siteId,
+      userId,
       workflowId,
       topic,
       status: 'queued',
@@ -412,6 +428,7 @@ export class JobsService {
     return {
       id: job.id,
       siteId: job.siteId,
+      userId: job.userId ?? null,
       workflowId: job.workflowId,
       topic: job.topic,
       status: job.status,
@@ -429,6 +446,21 @@ export class JobsService {
       throw new NotFoundException(`Job ${id} not found`);
     }
 
+    return job;
+  }
+
+  private async findEntityForUser(id: string, userId: string) {
+    const job = await this.findEntity(id);
+
+    if (job.userId) {
+      if (job.userId !== userId) {
+        throw new ForbiddenException(`Job ${id} does not belong to user`);
+      }
+      return job;
+    }
+
+    // Legacy jobs chưa có userId — kiểm tra ownership qua workflow
+    await this.automationsService.findOne(job.workflowId, userId);
     return job;
   }
 

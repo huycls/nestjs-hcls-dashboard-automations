@@ -19,6 +19,10 @@ export class AutomationJob {
   @Prop({ type: String, default: null })
   siteId: string | null;
 
+  /** Owner — denormalized từ Workflow.userId lúc tạo job */
+  @Prop({ type: String, index: true, default: null })
+  userId: string | null;
+
   @Prop({ required: true, index: true })
   workflowId: string;
 
@@ -48,3 +52,5 @@ export const AutomationJobSchema = SchemaFactory.createForClass(AutomationJob);
 
 AutomationJobSchema.index({ id: 1 }, { unique: true });
 AutomationJobSchema.index({ workflowId: 1, status: 1, createdAt: -1 });
+AutomationJobSchema.index({ userId: 1, createdAt: -1 });
+AutomationJobSchema.index({ userId: 1, workflowId: 1, createdAt: -1 });

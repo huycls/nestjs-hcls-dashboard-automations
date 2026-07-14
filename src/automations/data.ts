@@ -141,6 +141,7 @@ export const DEFAULT_WORKFLOW_UI_CREDENTIALS: WorkflowUiCredentials = {
 export type AutomationJobItem = {
   id: string;
   siteId: string | null;
+  userId: string | null;
   workflowId: string;
   topic: string;
   status: JobStatus;

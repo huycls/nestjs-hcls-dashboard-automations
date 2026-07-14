@@ -63,17 +63,12 @@ export class AutomationsService implements OnModuleInit {
     const workflowFilter = userId ? { userId } : {};
     const [workflows, jobs] = await Promise.all([
       this.workflowModel.find(workflowFilter).sort({ updatedAt: -1 }).exec(),
-      this.jobModel.find().sort({ createdAt: -1 }).exec(),
+      this.findJobsForUser(userId),
     ]);
 
-    const items = workflows.map(toWorkflowItem);
-    const workflowIds = new Set(items.map((w) => w.id));
-
     return {
-      workflows: items,
-      jobs: jobs
-        .map(toAutomationJobItem)
-        .filter((job) => !userId || workflowIds.has(job.workflowId)),
+      workflows: workflows.map(toWorkflowItem),
+      jobs: jobs.map(toAutomationJobItem),
     };
   }
 
@@ -81,22 +76,8 @@ export class AutomationsService implements OnModuleInit {
     userId?: string,
     workflowId?: string,
   ): Promise<AutomationJobItem[]> {
-    const filter = workflowId?.trim() ? { workflowId: workflowId.trim() } : {};
-    const jobs = await this.jobModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .exec();
-
-    const items = jobs.map(toAutomationJobItem);
-    if (!userId) return items;
-
-    const owned = await this.workflowModel
-      .find({ userId })
-      .select({ id: 1 })
-      .lean()
-      .exec();
-    const ownedIds = new Set(owned.map((w) => w.id));
-    return items.filter((job) => ownedIds.has(job.workflowId));
+    const jobs = await this.findJobsForUser(userId, workflowId);
+    return jobs.map(toAutomationJobItem);
   }
 
   async findOne(id: string, userId?: string): Promise<WorkflowItem> {
@@ -269,7 +250,11 @@ export class AutomationsService implements OnModuleInit {
     const credentials = toUiCredentials(dto.credentials);
 
     if (dto.topic !== undefined) {
-      workflow.topic = dto.topic.trim();
+      const current = toWorkflowItem(workflow).config;
+      workflow.config = mergeWorkflowConfig(workflow.type, current, {
+        topic: dto.topic.trim(),
+      });
+      workflow.markModified('config');
     }
 
     workflow.credentials = credentials;
@@ -429,6 +414,42 @@ export class AutomationsService implements OnModuleInit {
 
     return workflow;
   }
+
+  /**
+   * Jobs của user: ưu tiên filter userId denormalized;
+   * legacy jobs (chưa có userId) lấy qua owned workflowIds.
+   */
+  private async findJobsForUser(userId?: string, workflowId?: string) {
+    const scopedWorkflowId = workflowId?.trim() || undefined;
+
+    if (!userId) {
+      const filter = scopedWorkflowId ? { workflowId: scopedWorkflowId } : {};
+      return this.jobModel.find(filter).sort({ createdAt: -1 }).exec();
+    }
+
+    const owned = await this.workflowModel
+      .find({ userId })
+      .select({ id: 1 })
+      .lean()
+      .exec();
+    const ownedIds = owned.map((w) => w.id);
+
+    const filter: Record<string, unknown> = {
+      $or: [
+        { userId },
+        {
+          workflowId: { $in: ownedIds },
+          $or: [{ userId: null }, { userId: { $exists: false } }],
+        },
+      ],
+    };
+
+    if (scopedWorkflowId) {
+      filter.workflowId = scopedWorkflowId;
+    }
+
+    return this.jobModel.find(filter).sort({ createdAt: -1 }).exec();
+  }
 }
 
 function toAutomationJobItem(doc: AutomationJobDocument): AutomationJobItem {
@@ -437,6 +458,7 @@ function toAutomationJobItem(doc: AutomationJobDocument): AutomationJobItem {
   return {
     id: doc.id,
     siteId: doc.siteId ?? null,
+    userId: doc.userId ?? null,
     workflowId: doc.workflowId,
     topic: doc.topic,
     status: doc.status,
