@@ -325,8 +325,8 @@ export class AutomationsService implements OnModuleInit {
     }
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findEntity(id);
+  async remove(id: string, userId?: string): Promise<void> {
+    await this.findEntityForUser(id, userId);
     await this.workflowModel.deleteOne({ id }).exec();
   }
 
