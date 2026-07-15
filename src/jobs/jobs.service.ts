@@ -14,18 +14,32 @@ import { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { Model } from 'mongoose';
 import { AutomationsService } from '../automations/automations.service';
-import type { WorkflowItem } from '../automations/data';
-import { getConfigTopic, workflowRequiresTopic } from '../automations/data';
+import type {
+  JobCredentialRefs,
+  JobSettings,
+  WorkflowItem,
+  WorkflowUiCredentials,
+} from '../automations/data';
+import {
+  DEFAULT_JOB_CREDENTIAL_REFS,
+  DEFAULT_JOB_SETTINGS,
+  DEFAULT_WORKFLOW_UI_CREDENTIALS,
+  getConfigTopic,
+  workflowRequiresTopic,
+} from '../automations/data';
+import { CredentialsService } from '../credentials/credentials.service';
 import { N8nService } from '../automations/n8n.service';
 import type { N8nJobContext } from '../automations/n8n.types';
 import {
   AutomationJob,
   AutomationJobDocument,
 } from './schemas/automation-job.schema';
+import type { CreateJobDto } from './dto/create-job.dto';
 import type { N8nCallbackDto } from './dto/n8n-callback.dto';
 import type { N8nErrorDto } from './dto/n8n-error.dto';
 import type { N8nSuccessDto } from './dto/n8n-success.dto';
 import type { RunJobDto } from './dto/run-job.dto';
+import type { UpdateJobNodeConfigDto } from './dto/update-job-node-config.dto';
 import {
   AUTOMATION_QUEUE,
   type AutomationJobPayload,
@@ -60,9 +74,126 @@ export class JobsService {
     @InjectQueue(AUTOMATION_QUEUE)
     private readonly automationQueue: Queue<AutomationJobPayload> | undefined,
     private readonly automationsService: AutomationsService,
+    private readonly credentialsService: CredentialsService,
     private readonly n8nService: N8nService,
     private readonly jobsGateway: JobsGateway,
   ) {}
+
+  /**
+   * Tạo automation trong `automation_jobs`.
+   * `workflows` chỉ là type template — không tạo document mới ở đó.
+   */
+  async create(dto: CreateJobDto, userId: string) {
+    if (!userId?.trim()) {
+      throw new BadRequestException('userId is required');
+    }
+
+    const workflow = await this.automationsService.resolveWorkflowTypeTemplate(
+      { workflowId: dto.workflowId, type: dto.type },
+      userId,
+    );
+
+    const name = dto.name?.trim() || workflow.name;
+    const topic = dto.topic?.trim() || '';
+
+    const job = await this.jobModel.create({
+      id: `job-${randomUUID()}`,
+      siteId: workflow.siteId,
+      userId,
+      workflowId: workflow.id,
+      name,
+      topic,
+      settings: { ...DEFAULT_JOB_SETTINGS },
+      credentialRefs: { ...DEFAULT_JOB_CREDENTIAL_REFS },
+      status: 'draft',
+      n8nResponse: null,
+      callbackPayload: null,
+      errorMessage: null,
+      completedAt: null,
+    });
+
+    this.emit(job);
+    return this.toPublicJob(job, false);
+  }
+
+  /**
+   * Save node config:
+   * - secrets → `user_credentials` (ownerId = user)
+   * - job chỉ giữ credentialRefs + settings (model, spreadsheetId)
+   */
+  async updateNodeConfig(
+    jobId: string,
+    dto: UpdateJobNodeConfigDto,
+    userId: string,
+  ) {
+    const job = await this.findEntityForUser(jobId, userId);
+
+    if (!dto.credentials || typeof dto.credentials !== 'object') {
+      throw new BadRequestException('credentials is required');
+    }
+
+    if (dto.topic !== undefined) {
+      job.topic = dto.topic.trim();
+    }
+
+    if (dto.name !== undefined) {
+      job.name = dto.name.trim();
+    }
+
+    const model = dto.credentials.model?.trim() ?? '';
+    const spreadsheetId = dto.credentials.spreadsheetId?.trim() ?? '';
+    job.settings = { model, spreadsheetId };
+    job.markModified('settings');
+
+    const refs: JobCredentialRefs = {
+      ...(job.credentialRefs ?? {}),
+    };
+
+    if (dto.credentials.apiKeyCredentialId !== undefined) {
+      refs.apiKeyCredentialId =
+        dto.credentials.apiKeyCredentialId.trim() || undefined;
+    }
+    if (dto.credentials.googleCredentialId !== undefined) {
+      refs.googleCredentialId =
+        dto.credentials.googleCredentialId.trim() || undefined;
+    }
+    if (dto.credentials.wordpressCredentialId !== undefined) {
+      refs.wordpressCredentialId =
+        dto.credentials.wordpressCredentialId.trim() || undefined;
+    }
+
+    const openRouterApiKey = dto.credentials.openRouterApiKey?.trim() ?? '';
+    if (openRouterApiKey) {
+      const vault = await this.credentialsService.upsertApiKey(userId, {
+        label: `OpenRouter · ${job.name || job.id}`,
+        apiKey: openRouterApiKey,
+        existingId: refs.apiKeyCredentialId,
+        provider: 'openrouter',
+      });
+      refs.apiKeyCredentialId = vault.id;
+    }
+
+    const refIds = [
+      refs.apiKeyCredentialId,
+      refs.googleCredentialId,
+      refs.wordpressCredentialId,
+    ].filter((id): id is string => Boolean(id?.trim()));
+
+    if (refIds.length > 0) {
+      await this.credentialsService.resolveForUser(userId, refIds);
+    }
+
+    job.credentialRefs = refs;
+    job.markModified('credentialRefs');
+
+    // Drop legacy plaintext blob nếu còn
+    job.set('credentials', undefined);
+
+    await job.save();
+    this.emit(job);
+
+    return this.toPublicJobAsync(job, true);
+  }
 
   async run(dto: RunJobDto, userId: string) {
     const workflowId = dto.workflowId?.trim();
@@ -99,6 +230,10 @@ export class JobsService {
       ownerId,
       context.workflowId,
       topic,
+      '',
+      DEFAULT_JOB_SETTINGS,
+      DEFAULT_JOB_CREDENTIAL_REFS,
+      'queued',
     );
 
     if (this.isQueueEnabled()) {
@@ -142,15 +277,57 @@ export class JobsService {
 
   async dispatch(jobId: string): Promise<void> {
     const job = await this.findEntity(jobId);
+    const ownerId = job.userId ?? undefined;
     const context = await this.automationsService.resolveForTrigger(
       job.workflowId,
       job.topic,
+      ownerId,
     );
+
+    const settings = this.readSettings(job);
+    const refs = this.readCredentialRefs(job);
+    const hydrated = await this.hydrateCredentialsFromVault(
+      ownerId,
+      refs,
+      settings,
+    );
+
+    const mergedCredentials: WorkflowUiCredentials = {
+      openRouterApiKey:
+        hydrated.openRouterApiKey || context.credentials.openRouterApiKey,
+      model: settings.model || context.credentials.model,
+      spreadsheetId: settings.spreadsheetId || context.credentials.spreadsheetId,
+    };
+
+    // Merge job credential refs vào resolved list cho n8n
+    const jobRefIds = [
+      refs.apiKeyCredentialId,
+      refs.googleCredentialId,
+      refs.wordpressCredentialId,
+    ].filter((id): id is string => Boolean(id?.trim()));
+
+    let resolvedCredentials = context.resolvedCredentials;
+    if (ownerId && jobRefIds.length > 0) {
+      const map = await this.credentialsService.resolveForUser(
+        ownerId,
+        jobRefIds,
+      );
+      const byId = new Map(
+        resolvedCredentials.map((item) => [item.id, item]),
+      );
+      for (const item of map.values()) {
+        byId.set(item.id, item);
+      }
+      resolvedCredentials = [...byId.values()];
+    }
 
     await this.updateStatus(job, 'processing');
 
     const n8nContext: N8nJobContext = {
       ...context,
+      topic: job.topic || context.topic,
+      credentials: mergedCredentials,
+      resolvedCredentials,
       jobId: job.id,
       callbackUrl: this.buildCallbackUrl(),
       errorUrl: this.buildErrorUrl(),
@@ -367,12 +544,14 @@ export class JobsService {
       .sort({ createdAt: -1 })
       .exec();
 
-    return jobs.map((job) => this.toPublicJob(job));
+    // List: không hydrate secret
+    return jobs.map((job) => this.toPublicJob(job, false));
   }
 
   async findOne(id: string, userId: string) {
     const job = await this.findEntityForUser(id, userId);
-    return this.toPublicJob(job);
+    // Editor: hydrate secret từ vault cho form
+    return this.toPublicJobAsync(job, true);
   }
 
   private async createJob(
@@ -380,14 +559,21 @@ export class JobsService {
     userId: string,
     workflowId: string,
     topic: string,
+    name = '',
+    settings: JobSettings = DEFAULT_JOB_SETTINGS,
+    credentialRefs: JobCredentialRefs = DEFAULT_JOB_CREDENTIAL_REFS,
+    status: JobStatus = 'queued',
   ) {
     const saved = await this.jobModel.create({
       id: `job-${randomUUID()}`,
       siteId,
       userId,
       workflowId,
+      name,
       topic,
-      status: 'queued',
+      settings: { ...settings },
+      credentialRefs: { ...credentialRefs },
+      status,
       n8nResponse: null,
       callbackPayload: null,
       errorMessage: null,
@@ -409,7 +595,7 @@ export class JobsService {
   }
 
   private emit(job: AutomationJobDocument) {
-    this.jobsGateway.emitJobStatus(this.toPublicJob(job));
+    this.jobsGateway.emitJobStatus(this.toPublicJob(job, false));
   }
 
   private toRunResponse(
@@ -417,26 +603,118 @@ export class JobsService {
     workflow: WorkflowItem,
   ) {
     return {
-      job: this.toPublicJob(job),
+      job: this.toPublicJob(job, false),
       workflow,
     };
   }
 
-  private toPublicJob(job: AutomationJobDocument): JobStatusEvent {
+  private toPublicJob(
+    job: AutomationJobDocument,
+    _hydrateSecrets = false,
+  ): JobStatusEvent {
     const n8n = job.n8nResponse as JobStatusEvent['n8n'];
+    const settings = this.readSettings(job);
+    const credentialRefs = this.readCredentialRefs(job);
 
     return {
       id: job.id,
       siteId: job.siteId,
       userId: job.userId ?? null,
       workflowId: job.workflowId,
+      name: job.name ?? '',
       topic: job.topic,
+      settings,
+      credentialRefs,
+      credentials: {
+        openRouterApiKey: '',
+        model: settings.model,
+        spreadsheetId: settings.spreadsheetId,
+      },
       status: job.status,
       errorMessage: job.errorMessage,
       n8n: n8n ?? null,
       completedAt: job.completedAt?.toISOString() ?? null,
+      createdAt: job.createdAt?.toISOString(),
       updatedAt: job.updatedAt.toISOString(),
     };
+  }
+
+  private async toPublicJobAsync(
+    job: AutomationJobDocument,
+    hydrateSecrets: boolean,
+  ): Promise<JobStatusEvent> {
+    const base = this.toPublicJob(job, false);
+    if (!hydrateSecrets) return base;
+
+    const settings = this.readSettings(job);
+    const refs = this.readCredentialRefs(job);
+    const credentials = await this.hydrateCredentialsFromVault(
+      job.userId,
+      refs,
+      settings,
+    );
+
+    return { ...base, credentials };
+  }
+
+  private readSettings(job: AutomationJobDocument): JobSettings {
+    const settings = job.settings;
+    if (settings && (settings.model !== undefined || settings.spreadsheetId !== undefined)) {
+      return {
+        model: settings.model?.trim() ?? '',
+        spreadsheetId: settings.spreadsheetId?.trim() ?? '',
+      };
+    }
+
+    // Legacy plaintext blob trên job
+    const legacy = (
+      job as AutomationJobDocument & {
+        credentials?: { model?: string; spreadsheetId?: string };
+      }
+    ).credentials;
+
+    return {
+      model: legacy?.model?.trim() ?? '',
+      spreadsheetId: legacy?.spreadsheetId?.trim() ?? '',
+    };
+  }
+
+  private readCredentialRefs(job: AutomationJobDocument): JobCredentialRefs {
+    return {
+      apiKeyCredentialId: job.credentialRefs?.apiKeyCredentialId?.trim() || undefined,
+      googleCredentialId: job.credentialRefs?.googleCredentialId?.trim() || undefined,
+      wordpressCredentialId:
+        job.credentialRefs?.wordpressCredentialId?.trim() || undefined,
+    };
+  }
+
+  private async hydrateCredentialsFromVault(
+    ownerId: string | null | undefined,
+    refs: JobCredentialRefs,
+    settings: JobSettings,
+  ): Promise<WorkflowUiCredentials> {
+    const base: WorkflowUiCredentials = {
+      ...DEFAULT_WORKFLOW_UI_CREDENTIALS,
+      model: settings.model,
+      spreadsheetId: settings.spreadsheetId,
+    };
+
+    if (!ownerId || !refs.apiKeyCredentialId) {
+      return base;
+    }
+
+    try {
+      const map = await this.credentialsService.resolveForUser(ownerId, [
+        refs.apiKeyCredentialId,
+      ]);
+      const apiKeyCred = map.get(refs.apiKeyCredentialId);
+      return {
+        ...base,
+        openRouterApiKey: apiKeyCred?.data?.apiKey?.trim() ?? '',
+      };
+    } catch {
+      return base;
+    }
   }
 
   private async findEntity(id: string) {

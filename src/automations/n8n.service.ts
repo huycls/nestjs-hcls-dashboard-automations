@@ -142,6 +142,15 @@ export class N8nService {
       context.resolvedCredentials.map((item) => [item.id, item]),
     );
 
+    // Ưu tiên vault (data.apiKey / n8nCredentialId) — không phụ thuộc plaintext trên job
+    const apiKeyFromVault = context.resolvedCredentials.find(
+      (item) => item.type === 'api-key',
+    );
+    const openRouterApiKey =
+      context.credentials?.openRouterApiKey?.trim() ||
+      apiKeyFromVault?.data?.apiKey?.trim() ||
+      '';
+
     const body: Record<string, unknown> = {
       workflowId: context.workflowId,
       workflowType: context.workflowType,
@@ -156,13 +165,29 @@ export class N8nService {
           context.nodeCredentials.map((node) => [
             node.nodeTypeId,
             {
-              credentialId: node.credentialId,
+              credentialId: resolveN8nId(
+                context.resolvedCredentials,
+                node.credentialId,
+              ),
               config: node.config ?? {},
             },
           ]),
         ),
-        // Approach C — flat fields for n8n expressions
-        openRouterApiKey: context.credentials?.openRouterApiKey ?? '',
+        ...(apiKeyFromVault
+          ? {
+              'api-key': {
+                credentialId:
+                  apiKeyFromVault.n8nCredentialId ?? apiKeyFromVault.id,
+                config: {
+                  ...(apiKeyFromVault.data?.apiKey
+                    ? { apiKey: apiKeyFromVault.data.apiKey }
+                    : {}),
+                  model: context.credentials?.model ?? '',
+                },
+              },
+            }
+          : {}),
+        openRouterApiKey,
         model: context.credentials?.model ?? '',
         spreadsheetId: context.credentials?.spreadsheetId ?? '',
       },

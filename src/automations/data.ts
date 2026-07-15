@@ -138,12 +138,28 @@ export const DEFAULT_WORKFLOW_UI_CREDENTIALS: WorkflowUiCredentials = {
   spreadsheetId: '',
 };
 
+export type JobSettings = {
+  model: string;
+  spreadsheetId: string;
+};
+
+export type JobCredentialRefs = {
+  apiKeyCredentialId?: string;
+  googleCredentialId?: string;
+  wordpressCredentialId?: string;
+};
+
 export type AutomationJobItem = {
   id: string;
   siteId: string | null;
   userId: string | null;
   workflowId: string;
+  name: string;
   topic: string;
+  settings: JobSettings;
+  credentialRefs: JobCredentialRefs;
+  /** Hydrated for owner editor only — không lưu plaintext trên job */
+  credentials: WorkflowUiCredentials;
   status: JobStatus;
   errorMessage: string | null;
   n8n: {
@@ -156,6 +172,13 @@ export type AutomationJobItem = {
   createdAt: string;
   updatedAt: string;
 };
+
+export const DEFAULT_JOB_SETTINGS: JobSettings = {
+  model: '',
+  spreadsheetId: '',
+};
+
+export const DEFAULT_JOB_CREDENTIAL_REFS: JobCredentialRefs = {};
 
 export type AutomationsListResponse = {
   workflows: WorkflowItem[];

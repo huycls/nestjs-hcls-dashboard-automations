@@ -132,7 +132,10 @@ export class AutomationsController {
     );
   }
 
-  /** Save FE node config (topic + credentials) — load lại mỗi lần vào editor */
+  /**
+   * @deprecated Config thuộc automation job — dùng `PATCH /api/jobs/:id/node-config`
+   * Giữ endpoint để tránh break client cũ; không tạo workflow mới.
+   */
   @Patch(':id/node-config')
   updateNodeConfig(
     @Param('id') id: string,

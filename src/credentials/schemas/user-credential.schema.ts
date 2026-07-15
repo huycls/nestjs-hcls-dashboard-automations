@@ -12,19 +12,21 @@ export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
 export type UserCredentialDocument = HydratedDocument<UserCredential>;
 
 /**
- * Credentials thuộc về user — workflow chỉ lưu ref (`credentialId` = `id`).
+ * Kho credentials của user (User → Credentials → Jobs).
  *
- * - google-oauth / api-key → `n8nCredentialId`
+ * - `ownerId` → users._id
+ * - google-oauth / api-key → `n8nCredentialId` và/hoặc `data`
  * - wordpress → `data` { siteUrl, username?, appPassword? }
+ * - api-key (OpenRouter, …) → `data.apiKey` và/hoặc `n8nCredentialId`
  */
 @Schema({ timestamps: true, collection: 'user_credentials' })
 export class UserCredential {
   @Prop({ required: true, unique: true })
   id: string;
 
-  /** JWT `sub` / User._id.toString() */
+  /** Link tới users — canonical owner field */
   @Prop({ required: true, index: true })
-  userId: string;
+  ownerId: string;
 
   @Prop({ required: true, enum: CREDENTIAL_TYPES })
   type: CredentialType;
@@ -32,11 +34,15 @@ export class UserCredential {
   @Prop({ required: true, trim: true })
   label: string;
 
-  /** n8n credential id — dùng cho google-oauth, api-key */
+  /** n8n credential id — google-oauth, api-key (khi đã sync n8n) */
   @Prop({ type: String, default: undefined })
   n8nCredentialId?: string;
 
-  /** Extra payload — wordpress: siteUrl, username, appPassword */
+  /**
+   * Extra payload — secrets encrypted at rest (AES-256-GCM) via CryptoService:
+   * - wordpress: siteUrl, username, appPassword (encrypted)
+   * - api-key: apiKey (encrypted), provider?
+   */
   @Prop({ type: Object, default: undefined })
   data?: Record<string, string>;
 
@@ -46,5 +52,5 @@ export class UserCredential {
 
 export const UserCredentialSchema = SchemaFactory.createForClass(UserCredential);
 
-UserCredentialSchema.index({ userId: 1, type: 1 });
-UserCredentialSchema.index({ userId: 1, updatedAt: -1 });
+UserCredentialSchema.index({ ownerId: 1, type: 1 });
+UserCredentialSchema.index({ ownerId: 1, updatedAt: -1 });

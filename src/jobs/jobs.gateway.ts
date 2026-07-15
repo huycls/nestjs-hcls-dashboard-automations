@@ -9,12 +9,34 @@ import { Server, Socket } from 'socket.io';
 import { getSocketCorsOptions } from '../config/cors';
 import type { JobStatus } from './jobs.constants';
 
+export type JobSettingsPayload = {
+  model: string;
+  spreadsheetId: string;
+};
+
+export type JobCredentialRefsPayload = {
+  apiKeyCredentialId?: string;
+  googleCredentialId?: string;
+  wordpressCredentialId?: string;
+};
+
+/** Hydrated form shape — chỉ điền secret khi GET job chi tiết */
+export type JobUiCredentialsPayload = {
+  openRouterApiKey: string;
+  model: string;
+  spreadsheetId: string;
+};
+
 export type JobStatusEvent = {
   id: string;
   siteId: string | null;
   userId: string | null;
   workflowId: string;
+  name: string;
   topic: string;
+  settings: JobSettingsPayload;
+  credentialRefs: JobCredentialRefsPayload;
+  credentials: JobUiCredentialsPayload;
   status: JobStatus;
   errorMessage?: string | null;
   n8n?: {
@@ -24,6 +46,7 @@ export type JobStatusEvent = {
     webhookUrl?: string;
   } | null;
   completedAt?: string | null;
+  createdAt?: string;
   updatedAt: string;
 };
 

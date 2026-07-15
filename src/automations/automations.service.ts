@@ -19,6 +19,7 @@ import type {
   AutomationJobItem,
   AutomationsListResponse,
   WorkflowItem,
+  WorkflowType,
 } from './data';
 import type { CreateWorkflowDto } from './dto/create-workflow.dto';
 import type { UpdateWorkflowDto } from './dto/update-workflow.dto';
@@ -60,11 +61,23 @@ export class AutomationsService implements OnModuleInit {
   }
 
   async findAll(userId?: string): Promise<AutomationsListResponse> {
-    const workflowFilter = userId ? { userId } : {};
-    const [workflows, jobs] = await Promise.all([
-      this.workflowModel.find(workflowFilter).sort({ updatedAt: -1 }).exec(),
-      this.findJobsForUser(userId),
-    ]);
+    const jobs = await this.findJobsForUser(userId);
+    const jobWorkflowIds = [
+      ...new Set(jobs.map((job) => job.workflowId).filter(Boolean)),
+    ];
+
+    // workflows = type templates: owned by user + templates jobs đang ref
+    const workflowFilter =
+      userId && jobWorkflowIds.length > 0
+        ? { $or: [{ userId }, { id: { $in: jobWorkflowIds } }] }
+        : userId
+          ? { userId }
+          : {};
+
+    const workflows = await this.workflowModel
+      .find(workflowFilter)
+      .sort({ updatedAt: -1 })
+      .exec();
 
     return {
       workflows: workflows.map(toWorkflowItem),
@@ -80,9 +93,53 @@ export class AutomationsService implements OnModuleInit {
     return jobs.map(toAutomationJobItem);
   }
 
-  async findOne(id: string, userId?: string): Promise<WorkflowItem> {
-    const workflow = await this.findEntityForUser(id, userId);
-    return toWorkflowItem(workflow);
+  /** Read workflow type template — shared read cho mọi user đã auth */
+  async findOne(id: string, _userId?: string): Promise<WorkflowItem> {
+    return toWorkflowItem(await this.findEntity(id));
+  }
+
+  /**
+   * Resolve workflow type template — không tạo mới.
+   * Ưu tiên template của user, fallback template type chung.
+   */
+  async resolveWorkflowTypeTemplate(
+    options: { workflowId?: string; type?: string },
+    userId?: string,
+  ): Promise<WorkflowItem> {
+    const workflowId = options.workflowId?.trim();
+    const type = options.type?.trim() as WorkflowType | undefined;
+
+    // Type templates are shared read models — không enforce ownership khi resolve
+    if (workflowId) {
+      return toWorkflowItem(await this.findEntity(workflowId));
+    }
+
+    if (!type || !WORKFLOW_TYPES.some((item) => item.id === type)) {
+      throw new BadRequestException(
+        'workflowId or a valid type is required',
+      );
+    }
+
+    if (userId) {
+      const owned = await this.workflowModel
+        .findOne({ type, userId })
+        .sort({ createdAt: 1 })
+        .exec();
+      if (owned) return toWorkflowItem(owned);
+    }
+
+    const shared = await this.workflowModel
+      .findOne({ type })
+      .sort({ createdAt: 1 })
+      .exec();
+
+    if (!shared) {
+      throw new NotFoundException(
+        `No workflow type template found for type "${type}". Seed workflows first.`,
+      );
+    }
+
+    return toWorkflowItem(shared);
   }
 
   async resolveForTrigger(
@@ -90,8 +147,9 @@ export class AutomationsService implements OnModuleInit {
     topicOverride?: string,
     userId?: string,
   ): Promise<WorkflowTriggerContext> {
-    const workflow = await this.findEntityForUser(workflowId, userId);
-    return this.buildTriggerContext(workflow, topicOverride);
+    // workflow = type template (shared read); credentials resolve theo job owner
+    const workflow = await this.findEntity(workflowId);
+    return this.buildTriggerContext(workflow, topicOverride, userId);
   }
 
   async resolveBySiteId(
@@ -368,10 +426,11 @@ export class AutomationsService implements OnModuleInit {
   private async buildTriggerContext(
     workflow: WorkflowDocument,
     topicOverride?: string,
+    actingUserId?: string,
   ): Promise<WorkflowTriggerContext> {
     const item = toWorkflowItem(workflow);
     const refs = collectCredentialRefs(item.config);
-    const ownerId = workflow.userId;
+    const ownerId = actingUserId ?? workflow.userId;
 
     let resolvedCredentials: UserCredentialItem[] = [];
 
@@ -454,13 +513,30 @@ export class AutomationsService implements OnModuleInit {
 
 function toAutomationJobItem(doc: AutomationJobDocument): AutomationJobItem {
   const n8n = doc.n8nResponse as AutomationJobItem['n8n'];
+  const settings = {
+    model: doc.settings?.model?.trim() ?? '',
+    spreadsheetId: doc.settings?.spreadsheetId?.trim() ?? '',
+  };
 
   return {
     id: doc.id,
     siteId: doc.siteId ?? null,
     userId: doc.userId ?? null,
     workflowId: doc.workflowId,
+    name: doc.name ?? '',
     topic: doc.topic,
+    settings,
+    credentialRefs: {
+      apiKeyCredentialId: doc.credentialRefs?.apiKeyCredentialId,
+      googleCredentialId: doc.credentialRefs?.googleCredentialId,
+      wordpressCredentialId: doc.credentialRefs?.wordpressCredentialId,
+    },
+    // List không hydrate secret — chỉ non-secret settings
+    credentials: {
+      openRouterApiKey: '',
+      model: settings.model,
+      spreadsheetId: settings.spreadsheetId,
+    },
     status: doc.status,
     errorMessage: doc.errorMessage,
     n8n: n8n ?? null,

@@ -40,3 +40,19 @@ export function getJwtAccessExpiresIn(): string {
 export function getJwtRefreshExpiresIn(): string {
   return process.env.JWT_REFRESH_EXPIRES_IN?.trim() || '7d';
 }
+
+/**
+ * AES-256-GCM key cho secrets trong `user_credentials`.
+ * Format: 64 hex chars (32 bytes) hoặc base64 32-byte.
+ */
+export function getCredentialsEncryptionKey(): string {
+  const key = process.env.CREDENTIALS_ENCRYPTION_KEY?.trim();
+
+  if (!key) {
+    throw new Error(
+      'CREDENTIALS_ENCRYPTION_KEY is required (32-byte key as 64 hex chars)',
+    );
+  }
+
+  return key;
+}
