@@ -36,7 +36,7 @@ export class CredentialsService implements OnModuleInit {
     await this.credentialModel
       .updateMany(
         { userId: { $exists: true }, ownerId: { $exists: false } },
-        [{ $set: { ownerId: '$userId' } }, { $unset: 'userId' }],
+        { $rename: { userId: 'ownerId' } },
       )
       .exec();
   }
