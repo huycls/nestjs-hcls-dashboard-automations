@@ -153,10 +153,6 @@ export class JobsService {
       refs.apiKeyCredentialId =
         dto.credentials.apiKeyCredentialId.trim() || undefined;
     }
-    if (dto.credentials.googleCredentialId !== undefined) {
-      refs.googleCredentialId =
-        dto.credentials.googleCredentialId.trim() || undefined;
-    }
     if (dto.credentials.wordpressCredentialId !== undefined) {
       refs.wordpressCredentialId =
         dto.credentials.wordpressCredentialId.trim() || undefined;
@@ -171,6 +167,23 @@ export class JobsService {
         provider: 'openrouter',
       });
       refs.apiKeyCredentialId = vault.id;
+    }
+
+    if (dto.credentials.googleCredentialId !== undefined) {
+      refs.googleCredentialId =
+        dto.credentials.googleCredentialId.trim() || undefined;
+    } else if (!refs.googleCredentialId) {
+      refs.googleCredentialId =
+        await this.credentialsService.findLatestIdByType(
+          userId,
+          'google-oauth',
+        );
+    }
+
+    if (spreadsheetId && refs.googleCredentialId) {
+      await this.credentialsService.update(userId, refs.googleCredentialId, {
+        data: { spreadsheetId },
+      });
     }
 
     const refIds = [
@@ -699,18 +712,35 @@ export class JobsService {
       spreadsheetId: settings.spreadsheetId,
     };
 
-    if (!ownerId || !refs.apiKeyCredentialId) {
+    if (!ownerId) {
+      return base;
+    }
+
+    const vaultIds = [
+      refs.apiKeyCredentialId,
+      refs.googleCredentialId,
+    ].filter((id): id is string => Boolean(id?.trim()));
+
+    if (vaultIds.length === 0) {
       return base;
     }
 
     try {
-      const map = await this.credentialsService.resolveForUser(ownerId, [
-        refs.apiKeyCredentialId,
-      ]);
-      const apiKeyCred = map.get(refs.apiKeyCredentialId);
+      const map = await this.credentialsService.resolveForUser(ownerId, vaultIds);
+      const apiKeyCred = refs.apiKeyCredentialId
+        ? map.get(refs.apiKeyCredentialId)
+        : undefined;
+      const googleCred = refs.googleCredentialId
+        ? map.get(refs.googleCredentialId)
+        : undefined;
+
       return {
         ...base,
         openRouterApiKey: apiKeyCred?.data?.apiKey?.trim() ?? '',
+        spreadsheetId:
+          settings.spreadsheetId?.trim() ||
+          googleCred?.data?.spreadsheetId?.trim() ||
+          '',
       };
     } catch {
       return base;

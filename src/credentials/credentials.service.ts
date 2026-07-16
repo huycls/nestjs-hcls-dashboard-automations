@@ -52,6 +52,21 @@ export class CredentialsService implements OnModuleInit {
     return docs.map((doc) => this.toItem(doc, 'mask'));
   }
 
+  /** Latest credential id of a type for owner — used to link jobs → user_credentials */
+  async findLatestIdByType(
+    ownerId: string,
+    type: CredentialType,
+  ): Promise<string | undefined> {
+    const doc = await this.credentialModel
+      .findOne({ ownerId, type })
+      .sort({ updatedAt: -1 })
+      .select({ id: 1 })
+      .lean()
+      .exec();
+
+    return doc?.id;
+  }
+
   async findAllByUserAndType(
     ownerId: string,
     type: CredentialType,
