@@ -32,3 +32,15 @@ export type UpsertApiKeyCredentialDto = {
   existingId?: string;
   provider?: string;
 };
+
+export type UpsertGoogleOAuthCredentialDto = {
+  label: string;
+  email: string;
+  accessToken: string;
+  refreshToken?: string;
+  expiryDate?: string;
+  scope?: string;
+  tokenType?: string;
+  spreadsheetId?: string;
+  existingId?: string;
+};

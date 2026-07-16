@@ -8,6 +8,7 @@ import { AutomationsModule } from './automations/automations.module';
 import { getMongoConnectionString, isQueueEnabled } from './config/env';
 import { CredentialsModule } from './credentials/credentials.module';
 import { CryptoModule } from './crypto/crypto.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { JobsModule } from './jobs/jobs.module';
 
 @Module({
@@ -27,6 +28,7 @@ import { JobsModule } from './jobs/jobs.module';
     CryptoModule,
     AuthModule,
     CredentialsModule,
+    IntegrationsModule,
     AutomationsModule,
     JobsModule.register(),
   ],

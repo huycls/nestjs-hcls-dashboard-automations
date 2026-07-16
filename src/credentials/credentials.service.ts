@@ -12,6 +12,7 @@ import type {
   CreateCredentialDto,
   UpdateCredentialDto,
   UpsertApiKeyCredentialDto,
+  UpsertGoogleOAuthCredentialDto,
   UserCredentialItem,
 } from './credentials.types';
 import {
@@ -61,6 +62,19 @@ export class CredentialsService implements OnModuleInit {
       .exec();
 
     return docs.map((doc) => this.toItem(doc, 'mask'));
+  }
+
+  /** Internal — decrypted (dùng cho OAuth upsert / n8n resolve) */
+  async findDecryptedByUserAndType(
+    ownerId: string,
+    type: CredentialType,
+  ): Promise<UserCredentialItem[]> {
+    const docs = await this.credentialModel
+      .find({ ownerId, type })
+      .sort({ updatedAt: -1 })
+      .exec();
+
+    return docs.map((doc) => this.toItem(doc, 'decrypt'));
   }
 
   async findOneForUser(
@@ -204,6 +218,60 @@ export class CredentialsService implements OnModuleInit {
     });
   }
 
+  /** Upsert Google OAuth tokens vào vault (encrypted at rest) */
+  async upsertGoogleOAuth(
+    ownerId: string,
+    dto: UpsertGoogleOAuthCredentialDto,
+  ): Promise<UserCredentialItem> {
+    const email = dto.email?.trim();
+    const accessToken = dto.accessToken?.trim();
+    if (!email || !accessToken) {
+      throw new BadRequestException('email and accessToken are required');
+    }
+
+    const existingList = await this.findDecryptedByUserAndType(
+      ownerId,
+      'google-oauth',
+    );
+    const existing =
+      (dto.existingId?.trim()
+        ? existingList.find((item) => item.id === dto.existingId?.trim())
+        : null) ??
+      existingList.find((item) => item.data?.email === email) ??
+      existingList[0] ??
+      null;
+
+    const previousSpreadsheetId = existing?.data?.spreadsheetId?.trim() ?? '';
+    const previousRefresh = existing?.data?.refreshToken?.trim() ?? '';
+    const data: Record<string, string> = {
+      email,
+      accessToken,
+      ...(dto.refreshToken?.trim()
+        ? { refreshToken: dto.refreshToken.trim() }
+        : previousRefresh
+          ? { refreshToken: previousRefresh }
+          : {}),
+      ...(dto.expiryDate?.trim() ? { expiryDate: dto.expiryDate.trim() } : {}),
+      ...(dto.scope?.trim() ? { scope: dto.scope.trim() } : {}),
+      ...(dto.tokenType?.trim() ? { tokenType: dto.tokenType.trim() } : {}),
+      spreadsheetId:
+        dto.spreadsheetId?.trim() || previousSpreadsheetId || '',
+    };
+
+    if (existing) {
+      return this.update(ownerId, existing.id, {
+        label: dto.label.trim() || `Google · ${email}`,
+        data,
+      });
+    }
+
+    return this.create(ownerId, {
+      type: 'google-oauth',
+      label: dto.label.trim() || `Google · ${email}`,
+      data,
+    });
+  }
+
   async remove(ownerId: string, id: string): Promise<void> {
     await this.findEntityForUser(ownerId, id);
     await this.credentialModel.deleteOne({ id, ownerId }).exec();
@@ -271,9 +339,12 @@ export class CredentialsService implements OnModuleInit {
     },
   ) {
     if (type === 'google-oauth') {
-      if (!dto.n8nCredentialId?.trim()) {
+      const hasN8n = Boolean(dto.n8nCredentialId?.trim());
+      const hasAccessToken = Boolean(dto.data?.accessToken?.trim());
+      const hasRefreshToken = Boolean(dto.data?.refreshToken?.trim());
+      if (!hasN8n && !hasAccessToken && !hasRefreshToken) {
         throw new BadRequestException(
-          'google-oauth requires n8nCredentialId',
+          'google-oauth requires n8nCredentialId or OAuth tokens in data',
         );
       }
       return;

@@ -56,3 +56,42 @@ export function getCredentialsEncryptionKey(): string {
 
   return key;
 }
+
+export function getGoogleClientId(): string {
+  const value = process.env.GOOGLE_CLIENT_ID?.trim();
+  if (!value) {
+    throw new Error('GOOGLE_CLIENT_ID is required for Google OAuth');
+  }
+  return value;
+}
+
+export function getGoogleClientSecret(): string {
+  const value = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  if (!value) {
+    throw new Error('GOOGLE_CLIENT_SECRET is required for Google OAuth');
+  }
+  return value;
+}
+
+/** Nest callback URL — phải khớp Google Cloud Console redirect URI */
+export function getGoogleRedirectUri(): string {
+  const value = process.env.GOOGLE_REDIRECT_URI?.trim();
+  if (value) return value;
+
+  const appUrl = (process.env.APP_URL ?? `http://localhost:${process.env.PORT ?? 5000}`)
+    .replace(/\/$/, '');
+  return `${appUrl}/api/integrations/google/callback`;
+}
+
+export function getGoogleOAuthScopes(): string[] {
+  const raw = process.env.GOOGLE_OAUTH_SCOPES?.trim();
+  if (raw) {
+    return raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  }
+
+  return [
+    'openid',
+    'email',
+    'https://www.googleapis.com/auth/spreadsheets',
+  ];
+}
